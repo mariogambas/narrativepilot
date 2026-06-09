@@ -106,16 +106,18 @@ def compute_regime_factor(regime: dict) -> tuple[float, dict]:
 
 def select_bsc_token(top_coins: list[dict]) -> Optional[str]:
     """
-    Pick the strongest BSC-liquid coin from a narrative's top coins.
-    Priority: BNB first; otherwise the BSC-liquid coin with the best 7d move.
-    Returns None if none of the top coins trade on BSC.
+    Pick the strongest tradeable coin from a narrative's top coins: the
+    BSC-liquid coin with the best 7d move. BNB is always skipped — it is the
+    base/gas currency and the executor cannot swap BNB for BNB (the executor
+    keeps its own guard as a safety net, but the selector never proposes it).
+    Returns None only if no top coin of the narrative is tradeable.
     """
-    candidates = [c for c in top_coins if c.get("symbol") in BSC_LIQUID_IDS]
+    candidates = [
+        c for c in top_coins
+        if c.get("symbol") in BSC_LIQUID_IDS and c.get("symbol") != "BNB"
+    ]
     if not candidates:
         return None
-    for c in candidates:
-        if c.get("symbol") == "BNB":
-            return "BNB"
     best = max(candidates, key=lambda c: c.get("price_change_7d", 0.0))
     return best.get("symbol")
 
@@ -235,15 +237,24 @@ def _run_tests() -> None:
     check("big liquidations -> 0.70", liqf == 0.70, extra=f"got {liqf}")
     check("multiple extremes floored at 0.6", floorf == 0.6, extra=f"got {floorf}")
 
-    print("\n[3] BSC token selector")
-    coins_bnb = [{"symbol": "BTC", "price_change_7d": 2}, {"symbol": "BNB", "price_change_7d": -1},
-                 {"symbol": "CAKE", "price_change_7d": 5}]
-    coins_nobnb = [{"symbol": "BTC", "price_change_7d": 2}, {"symbol": "CAKE", "price_change_7d": 5},
-                   {"symbol": "LINK", "price_change_7d": 9}]
-    coins_none = [{"symbol": "BTC", "price_change_7d": 2}, {"symbol": "RENDER", "price_change_7d": 9}]
-    check("BNB prioritized", select_bsc_token(coins_bnb) == "BNB")
-    check("else best 7d BSC-liquid (LINK)", select_bsc_token(coins_nobnb) == "LINK",
-          extra=f"got {select_bsc_token(coins_nobnb)}")
+    print("\n[3] BSC token selector (BNB always skipped)")
+    coins_bnb_first = [{"symbol": "BNB", "price_change_7d": 9},
+                       {"symbol": "CAKE", "price_change_7d": 5},
+                       {"symbol": "ETH", "price_change_7d": 2}]
+    coins_mixed = [{"symbol": "BTC", "price_change_7d": 2},
+                   {"symbol": "ETH", "price_change_7d": 3},
+                   {"symbol": "SOL", "price_change_7d": 7}]
+    coins_only_bnb = [{"symbol": "BTC", "price_change_7d": 2},
+                      {"symbol": "BNB", "price_change_7d": 9}]
+    coins_none = [{"symbol": "BTC", "price_change_7d": 2},
+                  {"symbol": "RENDER", "price_change_7d": 9}]
+    check("[BNB, CAKE, ETH] skips BNB -> CAKE",
+          select_bsc_token(coins_bnb_first) == "CAKE",
+          extra=f"got {select_bsc_token(coins_bnb_first)}")
+    check("best 7d among tradeable (SOL)", select_bsc_token(coins_mixed) == "SOL",
+          extra=f"got {select_bsc_token(coins_mixed)}")
+    check("only BNB tradeable -> None (never proposes BNB)",
+          select_bsc_token(coins_only_bnb) is None)
     check("none BSC-liquid -> None", select_bsc_token(coins_none) is None)
 
     print("\n[4] Full scoring with mocked Hub narratives")
@@ -287,7 +298,9 @@ def _run_tests() -> None:
 
     check("strong narrative > 70 (entry)", s_strong > 70, extra=f"got {s_strong}")
     check("weak narrative < 40 (exit)", s_weak < 40, extra=f"got {s_weak}")
-    check("selector picks BNB for strong", res["best_tokens"]["Binance Ecosystem"] == "BNB")
+    check("selector skips BNB, picks CAKE (best 7d tradeable)",
+          res["best_tokens"]["Binance Ecosystem"] == "CAKE",
+          extra=f"got {res['best_tokens']['Binance Ecosystem']}")
     check("weak narrative token None (WIF not BSC-liquid)",
           res["best_tokens"]["Quiet Cats"] is None)
     check("regime_factor 1.0 in neutral", res["market_regime"]["regime_factor"] == 1.0)

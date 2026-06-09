@@ -22,6 +22,9 @@ from typing import Optional
 from cmc_client import NARRATIVES
 
 ENTRY_THRESHOLD = 70.0
+# Reduced-conviction band: [REDUCED_THRESHOLD, ENTRY_THRESHOLD] allows a
+# half-size entry instead of a plain HOLD.
+REDUCED_THRESHOLD = 55.0
 EXIT_THRESHOLD = 40.0
 MIN_TRADE_USD = 1.0
 
@@ -183,63 +186,73 @@ class Trader:
                         sold.add(sym)
                 continue
 
-            # BUY: score above entry threshold
+            # BUY: full conviction above ENTRY_THRESHOLD (10%), reduced
+            # conviction in [REDUCED_THRESHOLD, ENTRY_THRESHOLD] (half size).
             if score > ENTRY_THRESHOLD:
-                token = best_tokens.get(narrative)
-                price = prices.get(token, 0.0) if token else 0.0
-
-                already_held = any(
-                    p.narrative == narrative and s not in sold
-                    for s, p in portfolio.positions.items()
-                )
-
-                if already_held:
-                    decisions.append(TradeDecision(
-                        action="HOLD", narrative=narrative, token=token, price=price,
-                        reason=f"{narrative} score {score} > {ENTRY_THRESHOLD:.0f} but already holding; not pyramiding.",
-                        score=score,
-                    ))
-                elif token in sold:
-                    decisions.append(TradeDecision(
-                        action="HOLD", narrative=narrative, token=token, price=price,
-                        reason=f"{token} was just sold this cycle (stop-loss/exit); not re-entering same token.",
-                        score=score,
-                    ))
-                elif risk_off:
-                    decisions.append(TradeDecision(
-                        action="HOLD", narrative=narrative, token=token, price=price,
-                        reason=f"Risk-off: drawdown {drawdown*100:.1f}% >= cap {self.max_drawdown_pct*100:.0f}%. New entries blocked.",
-                        score=score,
-                    ))
-                elif not token or price <= 0:
-                    decisions.append(TradeDecision(
-                        action="HOLD", narrative=narrative, token=token, price=price,
-                        reason=f"{narrative} score {score} > threshold but no tradable token/price available.",
-                        score=score,
-                    ))
-                else:
-                    amount = min(self.max_position_pct * value, portfolio.cash_usd)
-                    if amount < MIN_TRADE_USD:
-                        decisions.append(TradeDecision(
-                            action="HOLD", narrative=narrative, token=token, price=price,
-                            reason=f"{narrative} score {score} > threshold but insufficient cash (${portfolio.cash_usd:.2f}).",
-                            score=score,
-                        ))
-                    else:
-                        decisions.append(TradeDecision(
-                            action="BUY", narrative=narrative, token=token, price=price,
-                            amount_usd=round(amount, 2),
-                            reason=f"{narrative} score {score} > threshold {ENTRY_THRESHOLD:.0f}. Buying strongest token {token}.",
-                            score=score,
-                        ))
+                size_pct = self.max_position_pct
+                entry_label = f"score {score} > threshold {ENTRY_THRESHOLD:.0f}"
+            elif score >= REDUCED_THRESHOLD:
+                size_pct = self.max_position_pct / 2
+                entry_label = (f"REDUCED_CONVICTION: score {score} in "
+                               f"[{REDUCED_THRESHOLD:.0f}, {ENTRY_THRESHOLD:.0f}] band")
             else:
-                # 40 <= score <= 70 -> HOLD
+                # 40 <= score < 55 -> plain HOLD
                 decisions.append(TradeDecision(
                     action="HOLD", narrative=narrative, token=best_tokens.get(narrative),
                     price=0.0,
-                    reason=f"{narrative} score {score} in hold band [{EXIT_THRESHOLD:.0f}, {ENTRY_THRESHOLD:.0f}].",
+                    reason=f"{narrative} score {score} in hold band [{EXIT_THRESHOLD:.0f}, {REDUCED_THRESHOLD:.0f}).",
                     score=score,
                 ))
+                continue
+
+            token = best_tokens.get(narrative)
+            price = prices.get(token, 0.0) if token else 0.0
+
+            already_held = any(
+                p.narrative == narrative and s not in sold
+                for s, p in portfolio.positions.items()
+            )
+
+            if already_held:
+                decisions.append(TradeDecision(
+                    action="HOLD", narrative=narrative, token=token, price=price,
+                    reason=f"{narrative} {entry_label} but already holding; not pyramiding.",
+                    score=score,
+                ))
+            elif token in sold:
+                decisions.append(TradeDecision(
+                    action="HOLD", narrative=narrative, token=token, price=price,
+                    reason=f"{token} was just sold this cycle (stop-loss/exit); not re-entering same token.",
+                    score=score,
+                ))
+            elif risk_off:
+                decisions.append(TradeDecision(
+                    action="HOLD", narrative=narrative, token=token, price=price,
+                    reason=f"Risk-off: drawdown {drawdown*100:.1f}% >= cap {self.max_drawdown_pct*100:.0f}%. New entries blocked.",
+                    score=score,
+                ))
+            elif not token or price <= 0:
+                decisions.append(TradeDecision(
+                    action="HOLD", narrative=narrative, token=token, price=price,
+                    reason=f"{narrative} {entry_label} but no tradable token/price available.",
+                    score=score,
+                ))
+            else:
+                amount = min(size_pct * value, portfolio.cash_usd)
+                if amount < MIN_TRADE_USD:
+                    decisions.append(TradeDecision(
+                        action="HOLD", narrative=narrative, token=token, price=price,
+                        reason=f"{narrative} {entry_label} but insufficient cash (${portfolio.cash_usd:.2f}).",
+                        score=score,
+                    ))
+                else:
+                    decisions.append(TradeDecision(
+                        action="BUY", narrative=narrative, token=token, price=price,
+                        amount_usd=round(amount, 2),
+                        reason=f"{narrative} {entry_label}. Buying strongest token {token} "
+                               f"at {size_pct*100:.0f}% sizing.",
+                        score=score,
+                    ))
 
         return decisions
 
@@ -338,6 +351,67 @@ def _run_tests() -> None:
     check("10% sizing wants $10 but BUY is capped at $3 cash",
           buy5 and abs(buy5.amount_usd - 3.0) < 1e-6,
           extra=f"got {buy5.amount_usd if buy5 else None}")
+
+    print("\n[6] Reduced-conviction band [55, 70]")
+    # score 60 -> half-size BUY (5% of $100 = $5)
+    pf6 = Portfolio(initial_capital_usd=100.0)
+    scores6 = {
+        "narrative_scores": {"Binance Ecosystem": 60.0},
+        "best_tokens": {"Binance Ecosystem": "CAKE"},
+    }
+    decs6 = trader.decide(scores6, {"CAKE": 1.30}, pf6)
+    rb = next((d for d in decs6 if d.action == "BUY"), None)
+    check("score 60 -> BUY emitted", rb is not None)
+    check("reduced BUY sized at 5% of $100 = $5",
+          rb and abs(rb.amount_usd - 5.0) < 1e-6,
+          extra=f"got {rb.amount_usd if rb else None}")
+    check("reason flags REDUCED_CONVICTION",
+          rb and "REDUCED_CONVICTION" in rb.reason,
+          extra=f"reason: {rb.reason if rb else None}")
+
+    # score 54 -> plain HOLD (below the reduced band)
+    pf6b = Portfolio(initial_capital_usd=100.0)
+    scores6b = {
+        "narrative_scores": {"Binance Ecosystem": 54.0},
+        "best_tokens": {"Binance Ecosystem": "CAKE"},
+    }
+    decs6b = trader.decide(scores6b, {"CAKE": 1.30}, pf6b)
+    check("score 54 -> HOLD, no BUY",
+          not any(d.action == "BUY" for d in decs6b))
+    hold6b = next((d for d in decs6b if d.action == "HOLD"), None)
+    check("score 54 reason cites hold band", hold6b and "hold band" in hold6b.reason,
+          extra=f"reason: {hold6b.reason if hold6b else None}")
+
+    # score 60 with an open position in the narrative -> HOLD (no pyramiding)
+    pf6c = Portfolio(initial_capital_usd=100.0)
+    pf6c.apply_buy("CAKE", "Binance Ecosystem", 5.0, 1.30)
+    decs6c = trader.decide(scores6, {"CAKE": 1.30}, pf6c)
+    check("score 60 with open position -> no BUY (no pyramiding)",
+          not any(d.action == "BUY" for d in decs6c))
+    hold6c = next((d for d in decs6c if d.action == "HOLD"), None)
+    check("no-pyramiding reason logged", hold6c and "not pyramiding" in hold6c.reason)
+
+    # full-conviction path unchanged: score 90 still buys 10%
+    pf6d = Portfolio(initial_capital_usd=100.0)
+    scores6d = {
+        "narrative_scores": {"Binance Ecosystem": 90.0},
+        "best_tokens": {"Binance Ecosystem": "CAKE"},
+    }
+    decs6d = trader.decide(scores6d, {"CAKE": 1.30}, pf6d)
+    fb = next((d for d in decs6d if d.action == "BUY"), None)
+    check("score 90 still buys at 10% ($10)",
+          fb and abs(fb.amount_usd - 10.0) < 1e-6,
+          extra=f"got {fb.amount_usd if fb else None}")
+    check("full-conviction reason has no REDUCED flag",
+          fb and "REDUCED_CONVICTION" not in fb.reason)
+
+    # reduced entries also blocked under drawdown risk-off
+    pf6e = Portfolio(initial_capital_usd=100.0)
+    pf6e.peak_value_usd = 100.0
+    pf6e.cash_usd = 75.0   # 25% drawdown -> risk_off
+    decs6e = trader.decide(scores6, {"CAKE": 1.30}, pf6e)
+    check("reduced entry blocked by risk-off drawdown",
+          not any(d.action == "BUY" for d in decs6e))
 
     print(f"\n{'='*50}")
     print(f"  {passed} passed, {failed} failed")
