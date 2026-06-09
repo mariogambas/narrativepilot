@@ -118,7 +118,7 @@ Unit tests are in each module (run with `python agent/<module>.py`):
 
 ```bash
 python agent/narrative_scorer.py    # 25/25 tests
-python agent/trader.py              # 14/14 tests
+python agent/trader.py              # 24/24 tests
 python agent/executor.py            # 7/7 tests
 ```
 
