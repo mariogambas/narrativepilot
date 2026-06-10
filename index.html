@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NarrativePilot AI — Autonomous Narrative Trading on BNB Chain</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --black: #0B0E11;
+    --surface: #1E2329;
+    --surface2: #2B3139;
+    --yellow: #FCD535;
+    --yellow-dim: rgba(252,213,53,0.12);
+    --green: #0ECB81;
+    --red: #F6465D;
+    --muted: #848E9C;
+    --text: #EAECEF;
+    --mono: 'JetBrains Mono', monospace;
+    --sans: 'Inter', sans-serif;
+  }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--black);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  a { color: var(--yellow); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* NAV */
+  nav {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+    background: rgba(11,14,17,0.92);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--surface2);
+    padding: 0 2rem;
+    height: 56px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .nav-logo {
+    display: flex; align-items: center; gap: 10px;
+    font-family: var(--mono); font-size: 14px; font-weight: 700;
+    color: var(--yellow); letter-spacing: 0.5px;
+  }
+  .nav-logo-mark {
+    width: 28px; height: 28px; background: var(--yellow);
+    border-radius: 6px; display: flex; align-items: center; justify-content: center;
+  }
+  .nav-logo-mark svg { display: block; }
+  .nav-links { display: flex; gap: 2rem; }
+  .nav-links a { font-size: 13px; color: var(--muted); }
+  .nav-links a:hover { color: var(--text); text-decoration: none; }
+  .nav-cta {
+    background: var(--yellow); color: var(--black);
+    font-size: 13px; font-weight: 600;
+    padding: 7px 16px; border-radius: 6px;
+    border: none; cursor: pointer;
+  }
+
+  /* LAYOUT */
+  .container { max-width: 900px; margin: 0 auto; padding: 0 2rem; }
+
+  /* HERO */
+  .hero {
+    padding: 140px 0 80px;
+    border-bottom: 1px solid var(--surface2);
+  }
+  .hero-eyebrow {
+    font-family: var(--mono); font-size: 11px; font-weight: 500;
+    color: var(--yellow); letter-spacing: 2px; text-transform: uppercase;
+    margin-bottom: 1.5rem;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .hero-eyebrow::before {
+    content: '';
+    display: inline-block; width: 24px; height: 1px; background: var(--yellow);
+  }
+  .hero-headline {
+    font-family: var(--mono); font-size: clamp(32px, 5vw, 52px);
+    font-weight: 700; line-height: 1.1;
+    color: #fff; margin-bottom: 1.5rem;
+    letter-spacing: -1px;
+  }
+  .hero-headline .accent { color: var(--yellow); }
+  .hero-sub {
+    font-size: 17px; color: var(--muted); line-height: 1.7;
+    max-width: 560px; margin-bottom: 2.5rem;
+  }
+  .hero-actions { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 3rem; }
+  .btn-primary {
+    background: var(--yellow); color: var(--black);
+    font-size: 14px; font-weight: 600;
+    padding: 11px 24px; border-radius: 6px;
+    border: none; cursor: pointer; display: inline-block;
+  }
+  .btn-primary:hover { background: #e6c22e; text-decoration: none; }
+  .btn-outline {
+    background: transparent; color: var(--text);
+    font-size: 14px; font-weight: 500;
+    padding: 11px 24px; border-radius: 6px;
+    border: 1px solid var(--surface2); cursor: pointer; display: inline-block;
+  }
+  .btn-outline:hover { border-color: var(--muted); text-decoration: none; }
+  .hero-badges { display: flex; gap: 8px; flex-wrap: wrap; }
+  .badge {
+    font-family: var(--mono); font-size: 11px;
+    background: var(--surface); border: 1px solid var(--surface2);
+    color: var(--muted); padding: 4px 10px; border-radius: 4px;
+  }
+
+  /* LIVE TERMINAL */
+  .terminal-section {
+    padding: 80px 0;
+    border-bottom: 1px solid var(--surface2);
+  }
+  .section-label {
+    font-family: var(--mono); font-size: 11px; font-weight: 500;
+    color: var(--yellow); letter-spacing: 2px; text-transform: uppercase;
+    margin-bottom: 2rem;
+  }
+  .terminal {
+    background: #0D1117;
+    border: 1px solid var(--surface2);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .terminal-bar {
+    background: var(--surface); padding: 10px 16px;
+    display: flex; align-items: center; gap: 8px;
+    border-bottom: 1px solid var(--surface2);
+  }
+  .terminal-dot { width: 10px; height: 10px; border-radius: 50%; }
+  .terminal-title {
+    font-family: var(--mono); font-size: 12px; color: var(--muted);
+    margin-left: 8px;
+  }
+  .terminal-live {
+    font-family: var(--mono); font-size: 11px;
+    background: rgba(14,203,129,0.15); color: var(--green);
+    padding: 2px 8px; border-radius: 3px; margin-left: auto;
+  }
+  .terminal-body { padding: 20px 24px; }
+  .t-line {
+    font-family: var(--mono); font-size: 13px;
+    margin-bottom: 6px; line-height: 1.6;
+  }
+  .t-dim { color: var(--muted); }
+  .t-yellow { color: var(--yellow); }
+  .t-green { color: var(--green); }
+  .t-red { color: var(--red); }
+  .t-white { color: #fff; }
+  .t-cyan { color: #56CCF2; }
+  .t-spacer { height: 12px; }
+
+  /* SCORE BARS */
+  .scores-grid {
+    margin-top: 16px;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .score-row { display: flex; align-items: center; gap: 12px; }
+  .score-name {
+    font-family: var(--mono); font-size: 12px; color: var(--muted);
+    min-width: 180px;
+  }
+  .score-bar-track {
+    flex: 1; height: 4px; background: var(--surface2); border-radius: 2px; overflow: hidden;
+  }
+  .score-bar-fill {
+    height: 4px; border-radius: 2px; width: 0%;
+    transition: width 1.8s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .score-number {
+    font-family: var(--mono); font-size: 13px; font-weight: 700;
+    min-width: 36px; text-align: right;
+  }
+  .score-zone {
+    font-family: var(--mono); font-size: 10px;
+    padding: 2px 7px; border-radius: 3px; min-width: 60px; text-align: center;
+  }
+  .zone-hold { background: rgba(252,213,53,0.15); color: var(--yellow); }
+  .zone-sell { background: rgba(246,70,93,0.15); color: var(--red); }
+  .zone-buy { background: rgba(14,203,129,0.15); color: var(--green); }
+
+  /* HOW IT WORKS */
+  .how-section {
+    padding: 80px 0;
+    border-bottom: 1px solid var(--surface2);
+  }
+  .section-header { margin-bottom: 3rem; }
+  .section-title {
+    font-family: var(--mono); font-size: 26px; font-weight: 700;
+    color: #fff; margin-bottom: 0.5rem; letter-spacing: -0.5px;
+  }
+  .section-sub { font-size: 15px; color: var(--muted); max-width: 500px; }
+  .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1px; background: var(--surface2); border: 1px solid var(--surface2); border-radius: 10px; overflow: hidden; }
+  .step {
+    background: var(--black); padding: 1.75rem;
+    position: relative;
+  }
+  .step-num {
+    font-family: var(--mono); font-size: 11px; font-weight: 700;
+    color: var(--yellow); letter-spacing: 1px; margin-bottom: 1rem;
+  }
+  .step-title {
+    font-size: 15px; font-weight: 600; color: #fff; margin-bottom: 0.5rem;
+  }
+  .step-desc { font-size: 13px; color: var(--muted); line-height: 1.6; }
+  .step-accent {
+    position: absolute; top: 1.75rem; right: 1.75rem;
+    font-family: var(--mono); font-size: 22px; font-weight: 700;
+    color: var(--surface2);
+  }
+
+  /* SCORING MODEL */
+  .model-section {
+    padding: 80px 0;
+    border-bottom: 1px solid var(--surface2);
+  }
+  .signals-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+  .signal-card {
+    background: var(--surface); border: 1px solid var(--surface2);
+    border-radius: 8px; padding: 1.25rem;
+  }
+  .signal-weight {
+    font-family: var(--mono); font-size: 28px; font-weight: 700;
+    color: var(--yellow); line-height: 1; margin-bottom: 8px;
+  }
+  .signal-name {
+    font-size: 13px; font-weight: 600; color: #fff; margin-bottom: 4px;
+  }
+  .signal-desc { font-size: 12px; color: var(--muted); line-height: 1.5; }
+  .regime-box {
+    margin-top: 2rem;
+    background: var(--surface); border: 1px solid var(--surface2);
+    border-left: 3px solid var(--yellow);
+    border-radius: 8px; padding: 1.25rem 1.5rem;
+    display: flex; gap: 1.5rem; flex-wrap: wrap;
+  }
+  .regime-item { flex: 1; min-width: 160px; }
+  .regime-label {
+    font-family: var(--mono); font-size: 11px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px;
+  }
+  .regime-val { font-family: var(--mono); font-size: 14px; color: var(--text); }
+
+  /* RISK */
+  .risk-section {
+    padding: 80px 0;
+    border-bottom: 1px solid var(--surface2);
+  }
+  .metrics-row {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 1px; background: var(--surface2);
+    border: 1px solid var(--surface2); border-radius: 10px; overflow: hidden;
+    margin-bottom: 2rem;
+  }
+  .metric-cell {
+    background: var(--black); padding: 1.5rem;
+  }
+  .metric-val {
+    font-family: var(--mono); font-size: 30px; font-weight: 700;
+    color: var(--green); line-height: 1; margin-bottom: 6px;
+  }
+  .metric-val.red { color: var(--red); }
+  .metric-val.yellow { color: var(--yellow); }
+  .metric-label { font-size: 12px; color: var(--muted); }
+
+  /* STACK */
+  .stack-section {
+    padding: 80px 0;
+    border-bottom: 1px solid var(--surface2);
+  }
+  .stack-pills { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 2rem; }
+  .stack-pill {
+    font-family: var(--mono); font-size: 12px;
+    background: var(--surface); border: 1px solid var(--surface2);
+    color: var(--text); padding: 6px 14px; border-radius: 20px;
+  }
+  .stack-pill.highlight {
+    background: var(--yellow-dim); border-color: rgba(252,213,53,0.3);
+    color: var(--yellow);
+  }
+
+  /* CTA */
+  .cta-section { padding: 100px 0; text-align: center; }
+  .cta-tag {
+    font-family: var(--mono); font-size: 11px;
+    color: var(--green); letter-spacing: 2px; text-transform: uppercase;
+    margin-bottom: 1rem;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+  }
+  .cta-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+  .cta-title {
+    font-family: var(--mono); font-size: clamp(24px, 4vw, 40px);
+    font-weight: 700; color: #fff; margin-bottom: 1rem; letter-spacing: -0.5px;
+  }
+  .cta-sub { font-size: 15px; color: var(--muted); margin-bottom: 2.5rem; }
+  .cta-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+
+  /* FOOTER */
+  footer {
+    border-top: 1px solid var(--surface2);
+    padding: 2rem;
+    text-align: center;
+    font-family: var(--mono); font-size: 12px; color: var(--muted);
+  }
+
+  /* SCROLLBAR */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: var(--black); }
+  ::-webkit-scrollbar-thumb { background: var(--surface2); border-radius: 3px; }
+
+  @media (max-width: 600px) {
+    .nav-links { display: none; }
+    .hero { padding: 100px 0 60px; }
+    .score-name { min-width: 120px; font-size: 11px; }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-logo">
+    <div class="nav-logo-mark">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+        <path d="M8 1L2 5v5l6 5 6-5V5L8 1z" stroke="#0B0E11" stroke-width="1.5" stroke-linejoin="round"/>
+        <path d="M8 1v14M2 5l6 3 6-3" stroke="#0B0E11" stroke-width="1.5" stroke-linejoin="round"/>
+      </svg>
+    </div>
+    NarrativePilot AI
+  </div>
+  <div class="nav-links">
+    <a href="#how">How it works</a>
+    <a href="#model">Scoring model</a>
+    <a href="#risk">Risk mgmt</a>
+    <a href="https://github.com/mariogambas/narrativepilot" target="_blank">GitHub</a>
+  </div>
+  <a href="https://dorahacks.io/buidl/44522/" target="_blank" class="nav-cta">View submission →</a>
+</nav>
+
+<section class="hero">
+  <div class="container">
+    <div class="hero-eyebrow">BNB Hack 2026 · Track 1 — Autonomous Trading Agents</div>
+    <h1 class="hero-headline">
+      Trade the narrative.<br>
+      <span class="accent">Before the price moves.</span>
+    </h1>
+    <p class="hero-sub">
+      NarrativePilot AI detects crypto narrative rotations in real-time using the CMC Agent Hub, scores them across four independent market signals, and executes autonomous trades on BNB Chain with quantitative risk management.
+    </p>
+    <div class="hero-actions">
+      <a href="https://github.com/mariogambas/narrativepilot" target="_blank" class="btn-primary">View on GitHub →</a>
+      <a href="https://dorahacks.io/buidl/44522/" target="_blank" class="btn-outline">DoraHacks submission</a>
+    </div>
+    <div class="hero-badges">
+      <span class="badge">CMC Agent Hub MCP</span>
+      <span class="badge">BNB Chain</span>
+      <span class="badge">PancakeSwap V2</span>
+      <span class="badge">Python 3.12</span>
+      <span class="badge">web3.py</span>
+      <span class="badge">57 tests passing</span>
+    </div>
+  </div>
+</section>
+
+<section class="terminal-section" id="live">
+  <div class="container">
+    <div class="section-label">Live agent output</div>
+    <div class="terminal">
+      <div class="terminal-bar">
+        <div class="terminal-dot" style="background:#F6465D"></div>
+        <div class="terminal-dot" style="background:#FCD535"></div>
+        <div class="terminal-dot" style="background:#0ECB81"></div>
+        <span class="terminal-title">narrativepilot · main.py --mode testnet</span>
+        <span class="terminal-live">● LIVE</span>
+      </div>
+      <div class="terminal-body">
+        <div class="t-line t-dim">NarrativePilot starting in TESTNET mode.</div>
+        <div class="t-line t-dim">Capital <span class="t-yellow">$500.00</span> | scan every <span class="t-white">15 min</span> | log → logs/trades.log</div>
+        <div class="t-spacer"></div>
+        <div class="t-line"><span class="t-yellow">[cycle 1]</span> <span class="t-dim">2026-06-22T10:00:14Z</span> <span class="t-cyan">(mainnet)</span></div>
+        <div class="t-line t-dim">&nbsp;&nbsp;regime: <span class="t-red">fear&greed=32 (Fear)</span>&nbsp;&nbsp;factor=<span class="t-white">0.90</span></div>
+        <div class="t-line t-dim">&nbsp;&nbsp;fetching narratives from CMC Agent Hub...</div>
+        <div class="t-spacer"></div>
+        <div class="t-line t-dim">&nbsp;&nbsp;scores:</div>
+        <div class="scores-grid" id="scoreDisplay">
+          <div class="score-row">
+            <div class="score-name">Prediction Markets</div>
+            <div class="score-bar-track"><div class="score-bar-fill" id="bar0" style="background:#FCD535"></div></div>
+            <div class="score-number t-yellow" id="num0">0.0</div>
+            <div class="score-zone zone-hold" id="zone0">HOLD</div>
+          </div>
+          <div class="score-row">
+            <div class="score-name">Binance Ecosystem</div>
+            <div class="score-bar-track"><div class="score-bar-fill" id="bar1" style="background:#0ECB81"></div></div>
+            <div class="score-number t-green" id="num1">0.0</div>
+            <div class="score-zone zone-buy" id="zone1">BUY</div>
+          </div>
+          <div class="score-row">
+            <div class="score-name">Privacy Blockchain</div>
+            <div class="score-bar-track"><div class="score-bar-fill" id="bar2" style="background:#848E9C"></div></div>
+            <div class="score-number" style="color:#848E9C" id="num2">0.0</div>
+            <div class="score-zone zone-sell" id="zone2">HOLD</div>
+          </div>
+          <div class="score-row">
+            <div class="score-name">SEC/CFTC Token</div>
+            <div class="score-bar-track"><div class="score-bar-fill" id="bar3" style="background:#F6465D"></div></div>
+            <div class="score-number t-red" id="num3">0.0</div>
+            <div class="score-zone zone-sell" id="zone3">SELL</div>
+          </div>
+        </div>
+        <div class="t-spacer"></div>
+        <div class="t-line"><span class="t-dim">&nbsp;&nbsp;portfolio:</span> <span class="t-white" id="portfolioVal">$500.00</span>&nbsp;&nbsp;<span class="t-dim">positions:</span> <span id="positionDisplay" class="t-green"></span></div>
+        <div class="t-line" id="actionLine"><span class="t-dim">&nbsp;&nbsp;action:</span> <span class="t-dim">scanning...</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="how-section" id="how">
+  <div class="container">
+    <div class="section-header">
+      <div class="section-label">Architecture</div>
+      <h2 class="section-title">How NarrativePilot works</h2>
+      <p class="section-sub">Five autonomous modules running in a continuous loop. No manual intervention required.</p>
+    </div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">01 / FETCH</div>
+        <div class="step-title">CMC Agent Hub</div>
+        <div class="step-desc">Connects via MCP every 15 minutes. Retrieves trending narratives with volumeWeightedPrice performance, social author counts, market cap changes.</div>
+        <div class="step-accent">→</div>
+      </div>
+      <div class="step">
+        <div class="step-num">02 / SCORE</div>
+        <div class="step-title">4-signal model</div>
+        <div class="step-desc">Each narrative scored 0–100 across rotation, momentum, volume, and social. Market regime filter applied to dampen scores in dangerous conditions.</div>
+        <div class="step-accent">→</div>
+      </div>
+      <div class="step">
+        <div class="step-num">03 / DECIDE</div>
+        <div class="step-title">Conviction tiers</div>
+        <div class="step-desc">Score ≥70: full BUY (10% sizing). Score 55–70: reduced conviction BUY (5%). Score &lt;40: SELL. Drawdown cap, stop-loss, and anti-churn guards applied.</div>
+        <div class="step-accent">→</div>
+      </div>
+      <div class="step">
+        <div class="step-num">04 / EXECUTE</div>
+        <div class="step-title">PancakeSwap V2</div>
+        <div class="step-desc">Swaps via web3.py with local key signing. Verified BSC liquidity for BNB, CAKE, ETH (Binance-Peg), SOL (Binance-Peg). Every tx logged to JSON.</div>
+        <div class="step-accent">↺</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="model-section" id="model">
+  <div class="container">
+    <div class="section-header">
+      <div class="section-label">Scoring model</div>
+      <h2 class="section-title">Four signals. One score.</h2>
+      <p class="section-sub">No lagging indicators. Each signal captures a different dimension of narrative momentum.</p>
+    </div>
+    <div class="signals-grid">
+      <div class="signal-card">
+        <div class="signal-weight">35%</div>
+        <div class="signal-name">Rotation</div>
+        <div class="signal-desc">volumeWeightedPrice vs. broader market. If a narrative outperforms BTC/ETH, capital is rotating in.</div>
+      </div>
+      <div class="signal-card">
+        <div class="signal-weight">25%</div>
+        <div class="signal-name">Momentum</div>
+        <div class="signal-desc">Market cap change blended 24h/7d/30d. Measures structural narrative growth, not just short-term noise.</div>
+      </div>
+      <div class="signal-card">
+        <div class="signal-weight">20%</div>
+        <div class="signal-name">Volume</div>
+        <div class="signal-desc">Trading activity surge as a liquidity confirmation. Real moves come with volume. Noise doesn't.</div>
+      </div>
+      <div class="signal-card">
+        <div class="signal-weight">20%</div>
+        <div class="signal-name">Social</div>
+        <div class="signal-desc">Unique CMC author count. Normalized relative to all narratives in each batch — not absolute numbers.</div>
+      </div>
+    </div>
+    <div class="regime-box">
+      <div class="regime-item">
+        <div class="regime-label">Regime filter</div>
+        <div class="regime-val">Dampens all scores in dangerous markets</div>
+      </div>
+      <div class="regime-item">
+        <div class="regime-label">Extreme fear/greed</div>
+        <div class="regime-val">×0.75 factor</div>
+      </div>
+      <div class="regime-item">
+        <div class="regime-label">High funding rates</div>
+        <div class="regime-val">×0.80 factor</div>
+      </div>
+      <div class="regime-item">
+        <div class="regime-label">Liquidations &gt;$500M</div>
+        <div class="regime-val">×0.85 factor</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="risk-section" id="risk">
+  <div class="container">
+    <div class="section-header">
+      <div class="section-label">Risk management</div>
+      <h2 class="section-title">It knows when not to trade.</h2>
+      <p class="section-sub">The agent that holds in Extreme Fear is smarter than the one that trades into every signal.</p>
+    </div>
+    <div class="metrics-row">
+      <div class="metric-cell">
+        <div class="metric-val yellow">10%</div>
+        <div class="metric-label">Max position size per narrative</div>
+      </div>
+      <div class="metric-cell">
+        <div class="metric-val red">−8%</div>
+        <div class="metric-label">Stop-loss per position</div>
+      </div>
+      <div class="metric-cell">
+        <div class="metric-val red">−20%</div>
+        <div class="metric-label">Portfolio drawdown cap</div>
+      </div>
+      <div class="metric-cell">
+        <div class="metric-val">5%</div>
+        <div class="metric-label">Reduced conviction sizing (55–70 zone)</div>
+      </div>
+      <div class="metric-cell">
+        <div class="metric-val yellow">57</div>
+        <div class="metric-label">Unit tests passing</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="stack-section">
+  <div class="container">
+    <div class="section-header">
+      <div class="section-label">Tech stack</div>
+      <h2 class="section-title">Built on the right primitives.</h2>
+    </div>
+    <div class="stack-pills">
+      <span class="stack-pill highlight">CMC Agent Hub MCP</span>
+      <span class="stack-pill highlight">BNB Chain</span>
+      <span class="stack-pill highlight">PancakeSwap V2</span>
+      <span class="stack-pill">Python 3.12</span>
+      <span class="stack-pill">web3.py</span>
+      <span class="stack-pill">eth-account</span>
+      <span class="stack-pill">asyncio</span>
+      <span class="stack-pill">Chart.js</span>
+      <span class="stack-pill">JSON audit log</span>
+    </div>
+    <div class="regime-box" style="border-left-color: var(--green);">
+      <div class="regime-item">
+        <div class="regime-label">Tradeable tokens (BSC)</div>
+        <div class="regime-val" style="color: var(--green);">BNB · CAKE · ETH (Binance-Peg) · SOL (Binance-Peg)</div>
+      </div>
+      <div class="regime-item">
+        <div class="regime-label">Liquidity verified</div>
+        <div class="regime-val">PancakeSwap V2 · June 2026</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="cta-section">
+  <div class="container">
+    <div class="cta-tag"><div class="cta-dot"></div> Live trading June 22–28, 2026</div>
+    <h2 class="cta-title">NarrativePilot goes live<br>on BNB Chain mainnet.</h2>
+    <p class="cta-sub">Autonomous. Auditable. Risk-managed. Every decision logged on-chain and in JSON.</p>
+    <div class="cta-actions">
+      <a href="https://github.com/mariogambas/narrativepilot" target="_blank" class="btn-primary">View source on GitHub →</a>
+      <a href="https://dorahacks.io/buidl/44522/" target="_blank" class="btn-outline">DoraHacks submission</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  NarrativePilot AI · BNB Hack: AI Trading Agent Edition 2026 · <a href="https://github.com/mariogambas/narrativepilot" target="_blank">github.com/mariogambas/narrativepilot</a>
+</footer>
+
+<script>
+  const targets = [65.2, 72.8, 38.4, 24.1];
+  const colors = ['#FCD535','#0ECB81','#848E9C','#F6465D'];
+  const zones = ['HOLD','BUY ↑','HOLD','SELL'];
+  const zoneClasses = ['zone-hold','zone-buy','zone-sell','zone-sell'];
+
+  window.addEventListener('load', () => {
+    setTimeout(() => {
+      targets.forEach((target, i) => {
+        const bar = document.getElementById('bar' + i);
+        const num = document.getElementById('num' + i);
+        const zone = document.getElementById('zone' + i);
+
+        bar.style.width = target + '%';
+
+        let current = 0;
+        const step = target / 60;
+        const interval = setInterval(() => {
+          current = Math.min(current + step, target);
+          num.textContent = current.toFixed(1);
+          if (current >= target) {
+            clearInterval(interval);
+            num.textContent = target.toFixed(1);
+          }
+        }, 30);
+
+        zone.textContent = zones[i];
+        zone.className = 'score-zone ' + zoneClasses[i];
+      });
+
+      setTimeout(() => {
+        document.getElementById('actionLine').innerHTML =
+          '<span class="t-dim">&nbsp;&nbsp;action:</span> <span class="t-green">BUY</span> <span class="t-white">CAKE</span> <span class="t-dim">· Binance Ecosystem score</span> <span class="t-green">72.8</span> <span class="t-dim">· $25.00 (5% reduced conviction)</span>';
+        document.getElementById('portfolioVal').textContent = '$475.00';
+        document.getElementById('positionDisplay').textContent = '[CAKE $25.00]';
+      }, 2200);
+    }, 600);
+  });
+</script>
+</body>
+</html>
