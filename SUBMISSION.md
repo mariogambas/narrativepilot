@@ -65,13 +65,15 @@ We built an agent that detects these rotations in real-time and acts before the 
   - `get_global_crypto_derivatives_metrics()` — funding rates, liquidation volume
   - `get_crypto_quotes_latest()` — current prices
 
-- **Execution:** web3.py + eth-account for local key signing; PancakeSwap V2 Router on BSC mainnet
+- **Execution:** Trust Wallet Agent Kit (TWAK) — non-custodial agent wallet with local signing, invoked via CLI. The agent never handles a raw private key; TWAK manages signing and broadcasting independently, keeping custody with the operator the entire time.
+
+- **Competition registration:** the agent registered on-chain against the official BNB Hack competition contract via `twak compete register`. [Verified registration transaction on BscScan](https://bscscan.com/tx/0x9a0d88d951b8a91a06b1f6f8f646a3220bcf883f186f245e4bfc6954d00c667a)
 
 - **Storage:** Local JSON logs (testnet); on-chain wallet state (mainnet)
 
 - **Dashboard:** HTML5 + Chart.js reading `logs/trades.log` in real-time (30s refresh)
 
-- **Language:** Python 3.12+, async/await for concurrent API calls
+- **Language:** Python 3.12+, async/await for concurrent API calls and non-blocking on-chain confirmation waits
 
 ---
 
@@ -79,38 +81,47 @@ We built an agent that detects these rotations in real-time and acts before the 
 
 ### Unit Tests (All Pass)
 
-- **narrative_scorer.py:** 25/25 tests (scoring logic, regime filter, token selection)
-- **trader.py:** 14/14 tests (decision tree, stop-loss, drawdown cap, position sizing)
-- **executor.py:** 7/7 tests (BUY/SELL simulation, price resolution, edge cases)
+- **narrative_scorer.py:** 27/27 tests (scoring logic, regime filter, token selection across 12-token universe)
+- **trader.py:** 39/39 tests (decision tree, stop-loss, drawdown cap, position sizing, forced daily trade, gas reserve)
+- **executor.py:** 21/21 tests (TWAK BUY/SELL execution, real JSON response parsing, edge cases)
+
+### Live Mainnet Validation
+
+Beyond unit tests, the execution layer was validated with a real transaction on BSC mainnet: a $0.50 BNB→CAKE swap via TWAK, used to confirm the actual JSON response schema before trusting it with competition capital. The transaction hash field turned out to be `hash`, not the `txHash` initially assumed from generic CLI conventions — caught and fixed before the live trading window, not after.
+
+[View the validation transaction on BscScan](https://bscscan.com/tx/0xa973fbc43bffc1f50a15c96890452a8a60942bf004d427257be1357ef5675073)
+
+### Competition Registration
+
+The agent's wallet is registered on-chain against the official BNB Hack competition contract, confirmed via `twak compete register`:
+
+[View registration transaction on BscScan](https://bscscan.com/tx/0x9a0d88d951b8a91a06b1f6f8f646a3220bcf883f186f245e4bfc6954d00c667a)
 
 ### Smoke Tests (Live CMC Data)
 
-Ran 2+ cycles on testnet with live CMC data:
+Ran multiple cycles on testnet with live CMC data across the full 12-token eligible universe:
 
 ```
 Cycle 1:
-  CMC narratives: Layer 1, Binance Ecosystem, SEC/CFTC Digital Commodities, US Strategic Crypto Reserve
-  Regime: Extreme Fear (fear & greed 16, factor 0.75)
-  Scores: Layer 1=35.8, Binance Ecosystem=34.7, ...
-  Decision: HOLD (no score >= 70 after regime filter)
+  CMC narratives: Layer 1, Binance Ecosystem, Prediction Markets, Privacy Blockchain, ...
+  Regime: Fear (fear & greed 22, factor 0.90)
+  Scores: Layer 1=55.9 (reduced conviction), Binance Ecosystem=51.7, ...
+  Decision: BUY ETH $5.00 (5% reduced-conviction sizing)
   
-Cycle 2:
-  (Regime still Extreme Fear)
-  Scores: Similar
-  Decision: HOLD
-  
-Result: Agent correctly identifies it's too risky to trade, preserves capital.
+Result: Agent correctly identifies a moderate-confidence signal and sizes 
+down rather than either skipping it entirely or going full size.
 ```
 
 ### Liquidity Verification
 
-Verified live on BSC:
-- **WBNB (BNB):** 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c — $8.76M in WBNB/BUSD pair
-- **CAKE:** 0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82 — High liquidity (native PancakeSwap token)
-- **ETH (Binance-Peg):** 0x2170ed0880ac9a755fd29b2688956bd959f933f8 — High liquidity (official Binance peg)
-- **SOL (Binance-Peg):** 0x570a5d26f7765ecb712c0924e4de545b89fd43df — High liquidity (official Binance peg)
+Verified live on BSC, cross-checked against independent sources (BscScan, CoinGecko) for the highest-conviction tokens:
 
-All 4 tokens have active PancakeSwap V2 pairs and can be traded.
+- **ETH (Binance-Peg):** `0x2170ed0880ac9a755fd29b2688956bd959f933f8` — 2.4M+ holders, deep liquidity
+- **CAKE:** `0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82` — native PancakeSwap token, 1.9M+ holders
+- **DOGE (Binance-Peg):** `0xbA2aE424d960c26247Dd6c32edC70B295c744C43` — $1.5M+ 24h volume, active PancakeSwap V2/V3 pairs
+- Plus XRP, ADA, TWT, LINK, AVAX, FIL, LTC, INJ, UNI — all 12 tokens are on the BNB Hack's official eligible token list and have verified BscScan-listed BEP-20 contracts with active PancakeSwap liquidity
+
+All 12 tokens have active PancakeSwap pairs and can be traded by the agent's executor.
 
 ### Dashboard
 
@@ -125,20 +136,20 @@ Live demo of the dashboard (showing portfolio, scores, decisions, equity curve) 
 3. **Monitor:** Check dashboard every few hours; review JSON logs for any anomalies
 4. **Adapt (if needed):** If market regime changes drastically (e.g., Fed announcement), the regime filter adjusts automatically; no manual tweaking needed
 
-**Risk posture:** Conservative. The agent only trades if regime allows *and* signal is strong. In current conditions (Extreme Fear), it would HOLD and wait. This is intentional — preserve capital until conditions align.
+**Risk posture:** Conservative, with three independent layers protecting capital: the regime filter dampens conviction in dangerous markets, the drawdown cap halts all new entries past -20% (overriding every other rule, including the mandatory daily trade), and a fixed gas reserve ensures the agent can never strand itself without funds to exit a position. A minimum-activity mechanism (forced small entry after 23 hours without a trade) keeps the agent qualified for ranking without compromising the risk rules above it.
 
 ---
 
 ## Stack Utilization
 
 ✅ **CoinMarketCap Agent Hub:** Primary data source for narratives and regime metrics
-✅ **BNB Chain:** Trade execution via PancakeSwap V2 on BSC mainnet
-✅ **Trust Wallet Agent Kit patterns:** Local key signing (similar to Trust Wallet's self-custody model)
+✅ **BNB Chain:** Trade execution on BSC mainnet across a 12-token eligible universe
+✅ **Trust Wallet Agent Kit (TWAK):** Sole execution layer — wallet creation, local non-custodial signing, on-chain swaps, and on-chain competition registration all flow through TWAK's CLI. This isn't a single swap call bolted onto separate logic; TWAK is the agent's only path to the chain.
 
 **Bonus integrations (eligible for partner prizes):**
-- CMC Agent Hub: $2k prize pool ← **This project qualifies**
-- BNB Stack: Uses BNB Chain for execution ← **This project qualifies**
-- Trust Wallet: Local key signing pattern ← **Conceptually aligned**
+- CMC Agent Hub special prize: this project's entire signal layer runs on the Hub's narrative and regime data
+- BNB Chain stack: all execution happens on BSC mainnet via PancakeSwap liquidity
+- Trust Wallet Agent Kit special prize: TWAK handles wallet creation, autonomous signing, balance queries, swaps, and competition registration — the full trade loop, not just plumbing
 
 ---
 

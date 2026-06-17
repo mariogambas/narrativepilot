@@ -27,11 +27,13 @@ NarrativePilot AI operates on a thesis: **narrative rotations are a leading sign
 ## Tech Stack
 
 - **Data:** CMC Agent Hub (MCP) — trending narratives, global metrics, derivatives data
-- **Execution:** web3.py + eth-account on BNB Chain; PancakeSwap V2 Router for swaps
+- **Execution:** Trust Wallet Agent Kit (TWAK) — non-custodial agent wallet, local signing, on-chain swaps via CLI
 - **Storage:** Local JSON logs (testnet) + on-chain wallet state (mainnet)
 - **Testing:** Testnet simulation (no real BNB spent), unit tests for each module
 
-**Tradeable tokens:** BNB, CAKE, ETH (Binance-Peg), SOL (Binance-Peg) — verified live liquidity on PancakeSwap V2.
+**Tradeable tokens (12, BNB Hack official eligible list):** ETH, CAKE, DOGE, XRP, ADA, TWT, LINK, AVAX, FIL, LTC, INJ, UNI — all Binance-Peg or native BEP-20, verified live liquidity on PancakeSwap V2/V3. BNB itself is excluded (native asset, not BEP-20, and not on the competition's eligible list).
+
+**Competition registration:** Agent wallet registered on-chain via `twak compete register` against the official BNB Hack competition contract on BSC. [View registration tx on BscScan](https://bscscan.com/tx/0x9a0d88d951b8a91a06b1f6f8f646a3220bcf883f186f245e4bfc6954d00c667a)
 
 ---
 
@@ -117,12 +119,12 @@ Quick summary:
 Unit tests are in each module (run with `python agent/<module>.py`):
 
 ```bash
-python agent/narrative_scorer.py    # 25/25 tests
-python agent/trader.py              # 24/24 tests
-python agent/executor.py            # 7/7 tests
+python agent/narrative_scorer.py    # 27/27 tests
+python agent/trader.py              # 39/39 tests
+python agent/executor.py            # 21/21 tests
 ```
 
-All pass. Smoke tests (live CMC data, real decisions) run during `python agent/main.py --mode testnet`.
+All pass. Smoke tests (live CMC data, real decisions, and a live $0.50 TWAK swap on mainnet) confirm the full pipeline end-to-end.
 
 ---
 
@@ -130,11 +132,13 @@ All pass. Smoke tests (live CMC data, real decisions) run during `python agent/m
 
 The agent enforces:
 
-- **Max position size:** 10% of portfolio per narrative
+- **Max position size:** 10% of portfolio per narrative (full conviction), 5% (reduced conviction, score 55-70), 2.5% (forced daily trade)
 - **Stop-loss:** Automatically exit if any position drops > 8%
-- **Portfolio drawdown cap:** If portfolio drops > 20% from peak, shift to HOLD mode (no new entries)
+- **Portfolio drawdown cap:** If portfolio drops > 20% from peak, shift to HOLD mode (no new entries) — this takes absolute priority over every other rule, including the forced daily trade
+- **Gas reserve:** $6 USD (~0.01 BNB) is always kept out of buy sizing so the agent never strands itself without funds to pay gas for a future sell
+- **Minimum daily activity:** if no trade has fired in 23 hours, the agent forces a small (2.5%) entry into the best-scoring narrative with an available, untouched token — required to qualify for Track 1 ranking. Survives PC restarts by reading the last trade timestamp back from the JSON log on startup
 - **Regime filter:** In fear/high-liquidation environments, reduce confidence scores by 25–40% (amortigua overconfidence)
-- **Token selector:** Only chooses tokens with verified BSC liquidity; rejects others safely
+- **Token selector:** Only chooses tokens with verified BSC liquidity from the 12-token eligible universe; rejects others safely
 
 **What it doesn't do:** No leverage, no borrowing, no manual overrides. Everything is deterministic and auditable.
 
@@ -144,13 +148,15 @@ The agent enforces:
 
 To go live on BSC mainnet:
 
-1. Fund your wallet with ~$1k BNB (or your chosen capital)
-2. In `.env`, change `TRADING_MODE=mainnet` and add your private key
-3. Verify `TOKEN_ADDRESSES` in `executor.py` (BNB, CAKE, ETH, SOL)
-4. Run: `python agent/main.py --mode mainnet`
-5. Monitor the dashboard and logs in real-time
+1. Install Trust Wallet Agent Kit (TWAK) in WSL/Linux: `curl -fsSL https://agent-kit.trustwallet.com/install.sh | bash`
+2. Run `twak setup` to create the agent wallet (non-custodial, encrypted in your OS keychain)
+3. Fund the agent wallet address with your trading capital in BNB
+4. Register for the competition: `twak compete register` (one-time, before the trading window opens)
+5. In `.env`, change `TRADING_MODE=mainnet` and set `INITIAL_CAPITAL_USD` to your actual deployed capital
+6. Run: `python agent/main.py --mode mainnet`
+7. Monitor the dashboard and logs in real-time
 
-**Important:** Start the agent a few hours before June 22 so the volume baseline (`logs/volume_history.json`) has time to accumulate and the Z-score exits warm-up mode.
+**Important:** Start the agent a few hours before the trading window opens so the agent has time to read the current market regime and narrative state before the live PnL window starts.
 
 ---
 

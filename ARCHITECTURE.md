@@ -178,31 +178,37 @@ Example: Binance Ecosystem scores 67 (HOLD zone), but if it scored 75 (entry), t
    - `portfolio.total_value()` = cash + (positions × current_price)
    - If `total_value > portfolio.peak_value`, update peak
    - `drawdown_pct = (peak - current) / peak`
-   - If `drawdown >= 20%`: set `risk_off = True` (no new entries)
+   - If `drawdown >= 20%`: set `risk_off = True` (no new entries) — this overrides every other rule, including the forced daily trade below
 
 2. **Sweep for stop-loss (max priority).**
    - For each open position: if `pnl_pct <= -8%`, mark for `SELL`
-   - Always executed, regardless of signal
+   - Always executed, regardless of signal or gas reserve (sells are never blocked by the gas reserve, since selling is what replenishes liquid BNB)
 
 3. **Score-based decision by narrative:**
    - If `score < 40`: `SELL` all positions in this narrative
-   - If `40 <= score < 70`: `HOLD` (no action)
-   - If `score >= 70`: try `BUY` best token, subject to guards:
+   - If `40 <= score < 55`: `HOLD` (no action)
+   - If `55 <= score < 70`: reduced-conviction `BUY` at 5% sizing
+   - If `score >= 70`: full-conviction `BUY` at 10% sizing, subject to guards:
      - Already own the token? → `HOLD` (no pyramiding)
      - Token was just sold this cycle (stop-loss)? → `HOLD` (no churn)
      - `risk_off = True` (drawdown cap)? → `HOLD`
      - No valid price? → `HOLD`
-     - Insufficient cash? → `HOLD`
-     - Otherwise: `BUY` with size `min(10% × portfolio_value, available_cash)`
+     - Insufficient cash after gas reserve? → `HOLD`
 
-**Position sizing:**
+4. **Forced daily trade (competition requirement).** The BNB Hack rules require at least 1 trade per day to qualify for Track 1 ranking. If `force_trade=True` (passed in from `main.py` when 23+ hours have elapsed since the last trade) and no normal BUY fired this cycle, the agent picks the best-scoring narrative with an available, unowned, not-just-sold token and forces a small entry at 2.5% sizing — half of the reduced-conviction size. This is blocked by `risk_off` and by the gas reserve exactly like a normal BUY. If no valid token exists anywhere, the agent logs an explicit warning and stays in HOLD rather than crash or violate risk rules.
+
+**Position sizing (with gas reserve):**
 
 ```
-max_per_position = 0.10 × portfolio_value
-actual_amount = min(max_per_position, available_cash)
+GAS_RESERVE_USD = 6.0  # always kept out of buy sizing
+spendable = max(0, cash - GAS_RESERVE_USD)
+max_per_position = size_pct × portfolio_value   # 10%, 5%, or 2.5%
+actual_amount = min(max_per_position, spendable)
 ```
 
-If portfolio is $100 and you have $50 cash, you can deploy up to $10 (10%) per trade, but cash limits you to $50. The agent buys once and holds until SELL signal.
+The $6 reserve (~0.01 BNB) is never touched by BUY sizing, so the agent can always afford gas for a future SELL — including an urgent stop-loss — even if every other dollar is deployed. If `spendable` after the reserve is below the minimum trade size, the agent HOLDs with an explicit "gas reserve" reason instead of forcing an undersized trade.
+
+If portfolio is $100 and you have $50 cash, spendable is $44 (after the $6 reserve). At 10% sizing, you can deploy up to $10 per trade, limited by spendable cash. The agent buys once and holds until SELL signal.
 
 **Output:** `TradeDecision` dataclass with action, token, price, amount USD, reason.
 
@@ -210,37 +216,34 @@ If portfolio is $100 and you have $50 cash, you can deploy up to $10 (10%) per t
 
 ### 4. executor.py
 
-**Purpose:** Execute or simulate trades. Handle blockchain interaction (mainnet) or mock it (testnet).
+**Purpose:** Execute or simulate trades using Trust Wallet Agent Kit (TWAK), a non-custodial CLI that handles wallet signing and on-chain swaps without the agent ever touching a private key directly.
 
 **Modes:**
 
-- **Testnet:** `_simulate()` returns a mock tx hash. No blockchain call, no capital spent.
-- **Mainnet:** `_execute_buy()` or `_execute_sell()` send real transactions via web3.py.
+- **Testnet:** `_simulate()` returns a mock tx hash. No blockchain call, no capital spent, no TWAK invocation at all.
+- **Mainnet:** `_buy_twak()` or `_sell_twak()` shell out to the `twak` CLI via `subprocess`, wrapped in `asyncio.to_thread()` so the agent's event loop isn't blocked while waiting for on-chain confirmation.
 
 **Mainnet logic (BUY):**
 
-1. Lazy-load web3 + PancakeSwap Router on first trade (don't init if never trading)
-2. Resolve token address from `TOKEN_ADDRESSES[symbol]`
-3. Fetch on-chain BNB price via `router.getAmountsOut(1e18 BNB, [WBNB, token])`
-4. Compute `qty = amount_usd / bnb_price` (how many BNB to spend)
-5. Construct path: `[WBNB, token]`
-6. **Guard:** If `token == "BNB"`, path would be `[WBNB, WBNB]` (invalid). Return `success=False`. (BNB is native; can't buy it with BNB.)
-7. Apply slippage: `amount_out_min = expected_out × (1 - slippage_pct)`
-8. Call `router.swapExactETHForTokens(qty, min_out, [path], address, deadline)`
-9. Sign with local account (`Account.from_key(private_key)`), broadcast, wait for receipt.
+1. Guard: if `token == "BNB"`, reject immediately (BNB is native, not a swappable BEP-20 target against itself)
+2. Resolve token contract address from `TOKEN_ADDRESSES[symbol]` (12-token eligible universe)
+3. Run `twak swap --usd <amount_usd> BNB <token_address> --chain bsc --slippage 1 --json`
+4. Parse the JSON response — confirmed live fields: `input`, `output`, `minReceived`, `provider`, `priceImpact`, `hash`, `explorer`. The transaction hash lives in the `hash` field (verified empirically against a real $0.50 mainnet swap, not assumed from documentation)
+5. Defensive parsing: if `hash` is missing, fall back to scanning all JSON values for a 66-character `0x`-prefixed string before giving up
 
 **Mainnet logic (SELL):**
 
-1. Approve router to spend token (if allowance is zero)
-2. Compute `qty = position_amount` (sell entire position)
-3. Path: `[token, WBNB]`
-4. Call `router.swapExactTokensForETH(qty, min_out, [path], address, deadline)`
+1. Query the real on-chain balance first: `twak balance --chain bsc --token <address> --json` (the wallet's actual `available` balance — TradeDecision doesn't carry a `qty` field, so unlike a naive implementation, the executor never assumes a stale or estimated quantity)
+2. Run `twak swap <exact_qty> <token_address> BNB --chain bsc --slippage 1 --json`
+3. Same defensive JSON parsing as BUY
 
 **Error handling:**
 
-- No price? → `success=False`
-- No `TOKEN_ADDRESSES` entry? → `success=False` (safe failure)
-- Gas error? Logged, returned in `ExecutionResult`
+- `subprocess.TimeoutExpired` (60s timeout) → `success=False`
+- `twak` not found in PATH → `success=False`
+- Non-zero exit code (insufficient funds, failed swap) → `success=False, error=stderr`
+- Unparseable JSON → `success=False`, raw output preserved in `error` for debugging
+- All exceptions caught; the agent's main loop never crashes on a failed trade
 
 **Testnet output:**
 
@@ -248,10 +251,10 @@ If portfolio is $100 and you have $50 cash, you can deploy up to $10 (10%) per t
 {
   "success": true,
   "action": "BUY",
-  "token": "SOL",
+  "token": "CAKE",
   "amount_usd": 10.0,
-  "fill_price": 155.0,
-  "qty": 0.0645,
+  "fill_price": 2.84,
+  "qty": 3.52,
   "tx_hash": "0x7c6a3f...",  // mock
   "simulated": true,
   "error": ""
@@ -421,3 +424,15 @@ jq '.[] | select(.cycle == 5)' logs/trades.log
 ```
 
 This shows exactly what the agent saw, scored, and decided at cycle 5. Full transparency.
+
+---
+
+## Test Coverage
+
+| Module | Tests |
+|--------|-------|
+| `narrative_scorer.py` | 27/27 |
+| `trader.py` | 39/39 |
+| `executor.py` | 21/21 |
+
+All passing, plus a live mainnet smoke test: a real $0.50 BNB→CAKE swap executed via TWAK confirmed the full execution path end-to-end, including the actual JSON response schema (`hash`, `output`, `minReceived`) used to harden the parsing logic against assumptions.
