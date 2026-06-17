@@ -31,15 +31,24 @@ DEFAULT_MCP_URL = "https://mcp.coinmarketcap.com/mcp"
 # empty and unused (trader's TOKEN_NARRATIVE derived from it is dead code).
 NARRATIVES: dict[str, list[str]] = {}
 
-# Tokens with liquidity on PancakeSwap / BSC — the tradeable universe for the
-# token selector and for price lookups. Maps symbol -> CMC id.
-# MUST stay in sync with executor.TOKEN_ADDRESSES (verified live, June 2026):
-# these 4 are the only symbols with active PancakeSwap V2 pairs.
+# Tradeable universe: BEP-20 tokens with verified BSC contracts and PancakeSwap
+# liquidity, eligible per BNB Hack competition rules (June 2026).
+# Maps symbol -> CMC id. Keep in sync with executor.TOKEN_ADDRESSES.
+# BNB is intentionally excluded: it is the native gas/swap-source currency,
+# never a swap target, and the selector always skips it.
 BSC_LIQUID_IDS: dict[str, int] = {
-    "BNB": 1839,
+    "ETH":  1027,
     "CAKE": 7186,
-    "ETH": 1027,
-    "SOL": 5426,
+    "DOGE": 74,
+    "XRP":  52,
+    "ADA":  2010,
+    "TWT":  5964,
+    "LINK": 1975,
+    "AVAX": 5805,
+    "FIL":  2280,
+    "LTC":  2,
+    "INJ":  7226,
+    "UNI":  7083,
 }
 
 

@@ -237,13 +237,20 @@ def _run_tests() -> None:
     check("big liquidations -> 0.70", liqf == 0.70, extra=f"got {liqf}")
     check("multiple extremes floored at 0.6", floorf == 0.6, extra=f"got {floorf}")
 
-    print("\n[3] BSC token selector (BNB always skipped)")
+    print("\n[3] BSC token selector (BNB always skipped, 12-token universe)")
+    # BNB skipped: CAKE (+5) and ETH (+2) are candidates, CAKE wins by 7d momentum
     coins_bnb_first = [{"symbol": "BNB", "price_change_7d": 9},
                        {"symbol": "CAKE", "price_change_7d": 5},
                        {"symbol": "ETH", "price_change_7d": 2}]
-    coins_mixed = [{"symbol": "BTC", "price_change_7d": 2},
-                   {"symbol": "ETH", "price_change_7d": 3},
-                   {"symbol": "SOL", "price_change_7d": 7}]
+    # New universe: DOGE, LINK, XRP all eligible; LINK (+12) is best
+    coins_defi = [{"symbol": "BTC", "price_change_7d": 2},
+                  {"symbol": "DOGE", "price_change_7d": 6},
+                  {"symbol": "LINK", "price_change_7d": 12},
+                  {"symbol": "XRP",  "price_change_7d": 4}]
+    # Mix of new tokens: AVAX wins by momentum
+    coins_new = [{"symbol": "SOL",  "price_change_7d": 20},   # SOL no longer eligible
+                 {"symbol": "AVAX", "price_change_7d": 8},
+                 {"symbol": "ADA",  "price_change_7d": 3}]
     coins_only_bnb = [{"symbol": "BTC", "price_change_7d": 2},
                       {"symbol": "BNB", "price_change_7d": 9}]
     coins_none = [{"symbol": "BTC", "price_change_7d": 2},
@@ -251,8 +258,12 @@ def _run_tests() -> None:
     check("[BNB, CAKE, ETH] skips BNB -> CAKE",
           select_bsc_token(coins_bnb_first) == "CAKE",
           extra=f"got {select_bsc_token(coins_bnb_first)}")
-    check("best 7d among tradeable (SOL)", select_bsc_token(coins_mixed) == "SOL",
-          extra=f"got {select_bsc_token(coins_mixed)}")
+    check("[DOGE+6, LINK+12, XRP+4] -> LINK (best 7d)",
+          select_bsc_token(coins_defi) == "LINK",
+          extra=f"got {select_bsc_token(coins_defi)}")
+    check("SOL no longer eligible, AVAX wins",
+          select_bsc_token(coins_new) == "AVAX",
+          extra=f"got {select_bsc_token(coins_new)}")
     check("only BNB tradeable -> None (never proposes BNB)",
           select_bsc_token(coins_only_bnb) is None)
     check("none BSC-liquid -> None", select_bsc_token(coins_none) is None)
@@ -265,9 +276,10 @@ def _run_tests() -> None:
         "volume_change_24h": 30.0,
         "vw_perf_24h": 6.0, "vw_perf_7d": 5.0, "vw_perf_30d": 4.0,
         "social_authors": 100,
-        "top_coins": [{"symbol": "BTC", "price_change_7d": -2},
-                      {"symbol": "BNB", "price_change_7d": 3},
-                      {"symbol": "CAKE", "price_change_7d": 8}],
+        "top_coins": [{"symbol": "BTC",  "price_change_7d": -2},
+                      {"symbol": "BNB",  "price_change_7d": 3},
+                      {"symbol": "CAKE", "price_change_7d": 8},
+                      {"symbol": "ETH",  "price_change_7d": 5}],
     }
     weak = {
         "name": "Quiet Cats", "slug": "quiet-cats", "rank": 2,

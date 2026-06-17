@@ -27,6 +27,13 @@ ENTRY_THRESHOLD = 70.0
 REDUCED_THRESHOLD = 55.0
 EXIT_THRESHOLD = 40.0
 MIN_TRADE_USD = 1.0
+# Forced daily trade size — half of reduced-conviction (2.5% of portfolio).
+# Used only when 23+ hours have passed without any BUY or SELL.
+FORCED_TRADE_PCT = 0.025
+# BNB gas reserve: always kept in cash, never spent on BUYs.
+# Ensures the agent can always pay gas for a SELL (including stop-loss).
+# ~0.01 BNB at ~$600. SELL decisions are never restricted by this.
+GAS_RESERVE_USD = 6.0
 
 # symbol -> narrative lookup
 TOKEN_NARRATIVE = {sym: n for n, syms in NARRATIVES.items() for sym in syms}
@@ -139,6 +146,7 @@ class Trader:
         scores_result: dict,
         prices: dict[str, float],
         portfolio: Portfolio,
+        force_trade: bool = False,
     ) -> list[TradeDecision]:
         decisions: list[TradeDecision] = []
         sold: set[str] = set()
@@ -238,11 +246,16 @@ class Trader:
                     score=score,
                 ))
             else:
-                amount = min(size_pct * value, portfolio.cash_usd)
+                spendable = max(0.0, portfolio.cash_usd - GAS_RESERVE_USD)
+                amount = min(size_pct * value, spendable)
                 if amount < MIN_TRADE_USD:
                     decisions.append(TradeDecision(
                         action="HOLD", narrative=narrative, token=token, price=price,
-                        reason=f"{narrative} {entry_label} but insufficient cash (${portfolio.cash_usd:.2f}).",
+                        reason=(
+                            f"{narrative} {entry_label} but insufficient spendable cash "
+                            f"(${portfolio.cash_usd:.2f} total, ${GAS_RESERVE_USD:.2f} "
+                            f"reserved for gas)."
+                        ),
                         score=score,
                     ))
                 else:
@@ -253,6 +266,71 @@ class Trader:
                                f"at {size_pct*100:.0f}% sizing.",
                         score=score,
                     ))
+
+        # --- 3) forced daily trade -------------------------------------------
+        # Triggered by main.py when 23+ hours have elapsed without a trade.
+        # Only fires if the normal loop produced zero BUYs.
+        if force_trade and not any(d.action == "BUY" for d in decisions):
+            if risk_off:
+                # Drawdown cap takes absolute priority — no trade even when forced.
+                decisions.append(TradeDecision(
+                    action="HOLD", narrative="forced_trade_skipped", token=None,
+                    price=0.0,
+                    reason=(f"FORCED_DAILY_TRADE blocked: drawdown {drawdown*100:.1f}% "
+                            f">= cap {self.max_drawdown_pct*100:.0f}%. "
+                            f"Risk-off takes priority over daily activity requirement."),
+                    score=0.0,
+                ))
+            else:
+                # Best candidate: highest-score narrative with an available,
+                # unowned token that was not sold this cycle.
+                candidates = sorted(
+                    (
+                        (nar, scr, best_tokens.get(nar))
+                        for nar, scr in scores.items()
+                        if best_tokens.get(nar)
+                        and best_tokens.get(nar) not in portfolio.positions
+                        and best_tokens.get(nar) not in sold
+                    ),
+                    key=lambda x: x[1],
+                    reverse=True,
+                )
+                if not candidates:
+                    decisions.append(TradeDecision(
+                        action="HOLD", narrative="forced_trade_no_token",
+                        token=None, price=0.0,
+                        reason=(
+                            "FORCED_DAILY_TRADE skipped: no valid BSC-liquid token "
+                            "available in any narrative. Cannot meet daily activity "
+                            "requirement this cycle."
+                        ),
+                        score=0.0,
+                    ))
+                else:
+                    nar, scr, token = candidates[0]
+                    price = prices.get(token, 0.0)
+                    spendable = max(0.0, portfolio.cash_usd - GAS_RESERVE_USD)
+                    amount = min(FORCED_TRADE_PCT * value, spendable)
+                    if amount >= MIN_TRADE_USD and price > 0:
+                        decisions.append(TradeDecision(
+                            action="BUY", narrative=nar, token=token, price=price,
+                            amount_usd=round(amount, 2),
+                            reason=(
+                                f"FORCED_DAILY_TRADE: {nar} score {scr:.1f}, "
+                                f"executed to meet minimum daily activity requirement."
+                            ),
+                            score=scr,
+                        ))
+                    else:
+                        decisions.append(TradeDecision(
+                            action="HOLD", narrative=nar, token=token, price=0.0,
+                            reason=(
+                                f"FORCED_DAILY_TRADE skipped: insufficient spendable cash "
+                                f"(${portfolio.cash_usd:.2f} total, ${GAS_RESERVE_USD:.2f} "
+                                f"reserved for gas) or no price for {token}."
+                            ),
+                            score=scr,
+                        ))
 
         return decisions
 
@@ -337,19 +415,19 @@ def _run_tests() -> None:
     check("risk-off reason is logged", hold and "Risk-off" in hold.reason,
           extra=f"{hold.reason if hold else None}")
 
-    print("\n[5] Position size never exceeds available cash")
-    # Capital is tied up in a meme position ($97), only $3 cash free.
-    # Value is ~$100 so 10% sizing wants $10, but cash caps the BUY at $3.
+    print("\n[5] Position size never exceeds spendable cash (cash minus gas reserve)")
+    # $15 cash, $85 in DOGE. Value ~$100 so 10% sizing wants $10.
+    # But spendable = $15 - $6 gas reserve = $9 -> BUY capped at $9 (not $10).
     pf5 = Portfolio(initial_capital_usd=100.0)
-    pf5.apply_buy("DOGE", "meme_coins", 97.0, 0.10)  # cash -> $3, value still ~$100
+    pf5.apply_buy("DOGE", "meme_coins", 85.0, 0.10)  # cash -> $15, value still ~$100
     scores5 = {
         "narrative_scores": {"ai_tokens": 90.0, "meme_coins": 50.0},  # meme HOLD, keep DOGE
         "best_tokens": {"ai_tokens": "RENDER", "meme_coins": "DOGE"},
     }
     decs5 = trader.decide(scores5, {"RENDER": 8.0, "DOGE": 0.10}, pf5)
     buy5 = next((d for d in decs5 if d.action == "BUY"), None)
-    check("10% sizing wants $10 but BUY is capped at $3 cash",
-          buy5 and abs(buy5.amount_usd - 3.0) < 1e-6,
+    check("10% sizing wants $10 but BUY is capped at $9 (spendable after $6 gas reserve)",
+          buy5 and abs(buy5.amount_usd - 9.0) < 1e-6,
           extra=f"got {buy5.amount_usd if buy5 else None}")
 
     print("\n[6] Reduced-conviction band [55, 70]")
@@ -412,6 +490,112 @@ def _run_tests() -> None:
     decs6e = trader.decide(scores6, {"CAKE": 1.30}, pf6e)
     check("reduced entry blocked by risk-off drawdown",
           not any(d.action == "BUY" for d in decs6e))
+
+    print("\n[7] Forced daily trade (force_trade=True)")
+
+    # [7a] All narratives in HOLD band -> forced BUY at 2.5% on best narrative
+    pf7a = Portfolio(initial_capital_usd=100.0)
+    scores7a = {
+        "narrative_scores": {"Layer 1": 45.0, "DeFi": 42.0},
+        "best_tokens": {"Layer 1": "ETH", "DeFi": "LINK"},
+    }
+    decs7a = trader.decide(scores7a, {"ETH": 1800.0, "LINK": 8.0}, pf7a, force_trade=True)
+    fb7a = next((d for d in decs7a if d.action == "BUY"), None)
+    check("force_trade: BUY emitted when all HOLDs", fb7a is not None,
+          extra=f"decisions: {[(d.action, d.token) for d in decs7a]}")
+    check("force_trade: picks best-score narrative (Layer 1 45 > DeFi 42)",
+          fb7a and fb7a.narrative == "Layer 1",
+          extra=f"got narrative={fb7a.narrative if fb7a else None}")
+    check("force_trade: sized at 2.5% of $100 = $2.50",
+          fb7a and abs(fb7a.amount_usd - 2.50) < 1e-6,
+          extra=f"got {fb7a.amount_usd if fb7a else None}")
+    check("force_trade: reason contains FORCED_DAILY_TRADE",
+          fb7a and "FORCED_DAILY_TRADE" in fb7a.reason,
+          extra=f"reason: {fb7a.reason if fb7a else None}")
+
+    # [7b] force_trade=True but risk_off (25% drawdown) -> HOLD, never forced
+    pf7b = Portfolio(initial_capital_usd=100.0)
+    pf7b.peak_value_usd = 100.0
+    pf7b.cash_usd = 75.0   # 25% drawdown -> risk_off
+    decs7b = trader.decide(scores7a, {"ETH": 1800.0, "LINK": 8.0}, pf7b, force_trade=True)
+    check("force_trade blocked by risk-off: no BUY",
+          not any(d.action == "BUY" for d in decs7b))
+    hold7b = next((d for d in decs7b if "FORCED_DAILY_TRADE blocked" in d.reason), None)
+    check("force_trade blocked: reason mentions drawdown cap",
+          hold7b is not None,
+          extra=f"reasons: {[d.reason for d in decs7b]}")
+
+    # [7c] force_trade=True but no valid best_token in any narrative -> HOLD + warning
+    pf7c = Portfolio(initial_capital_usd=100.0)
+    scores7c = {
+        "narrative_scores": {"NFT": 48.0, "Gaming": 44.0},
+        "best_tokens": {"NFT": None, "Gaming": None},  # no BSC-liquid token
+    }
+    decs7c = trader.decide(scores7c, {}, pf7c, force_trade=True)
+    check("force_trade with no tokens: no BUY",
+          not any(d.action == "BUY" for d in decs7c))
+    warn7c = next((d for d in decs7c if "FORCED_DAILY_TRADE skipped" in d.reason), None)
+    check("force_trade no token: warning reason in decisions",
+          warn7c is not None,
+          extra=f"reasons: {[d.reason for d in decs7c]}")
+
+    # [7d] force_trade=False -> normal behavior, no FORCED_DAILY_TRADE added
+    pf7d = Portfolio(initial_capital_usd=100.0)
+    decs7d = trader.decide(scores7a, {"ETH": 1800.0, "LINK": 8.0}, pf7d, force_trade=False)
+    check("force_trade=False: no forced BUY, normal HOLD behavior",
+          not any("FORCED_DAILY_TRADE" in d.reason for d in decs7d))
+    check("force_trade=False: no BUY emitted (scores 45/42 are in HOLD band)",
+          not any(d.action == "BUY" for d in decs7d))
+
+    print("\n[8] Gas reserve (GAS_RESERVE_USD = $6 always held back from BUYs)")
+
+    # [8a] Normal BUY: $100 cash -> spendable $94, 10% sizing wants $10 -> BUY $10 (well under spendable)
+    pf8a = Portfolio(initial_capital_usd=100.0)
+    scores8a = {
+        "narrative_scores": {"Layer 1": 80.0},
+        "best_tokens": {"Layer 1": "ETH"},
+    }
+    decs8a = trader.decide(scores8a, {"ETH": 1800.0}, pf8a)
+    buy8a = next((d for d in decs8a if d.action == "BUY"), None)
+    check("normal BUY still fires (gas reserve doesn't block $10 from $100)",
+          buy8a is not None and abs(buy8a.amount_usd - 10.0) < 1e-6,
+          extra=f"got {buy8a.amount_usd if buy8a else None}")
+
+    # [8b] $7 cash: spendable = $1, 10% of $100 portfolio = $10 -> BUY capped at $1 (== MIN_TRADE_USD)
+    pf8b = Portfolio(initial_capital_usd=100.0)
+    pf8b.cash_usd = 7.0
+    pf8b.positions["DOGE"] = Position("DOGE", "Meme", qty=930.0, entry_price=0.10, cost_usd=93.0)
+    decs8b = trader.decide(scores8a, {"ETH": 1800.0, "DOGE": 0.10}, pf8b)
+    buy8b = next((d for d in decs8b if d.action == "BUY"), None)
+    check("$7 cash: BUY capped at $1 (spendable after $6 gas reserve)",
+          buy8b is not None and abs(buy8b.amount_usd - 1.0) < 1e-6,
+          extra=f"got {buy8b.amount_usd if buy8b else None}")
+
+    # [8c] $6.50 cash: spendable = $0.50 < MIN_TRADE_USD -> HOLD with gas-reserve reason
+    pf8c = Portfolio(initial_capital_usd=100.0)
+    pf8c.cash_usd = 6.50
+    pf8c.positions["DOGE"] = Position("DOGE", "Meme", qty=935.0, entry_price=0.10, cost_usd=93.5)
+    decs8c = trader.decide(scores8a, {"ETH": 1800.0, "DOGE": 0.10}, pf8c)
+    check("$6.50 cash: HOLD (only $0.50 spendable after gas reserve)",
+          not any(d.action == "BUY" for d in decs8c))
+    hold8c = next((d for d in decs8c if "reserved for gas" in d.reason), None)
+    check("gas-reserve HOLD has explanatory reason",
+          hold8c is not None,
+          extra=f"reasons: {[d.reason for d in decs8c]}")
+
+    # [8d] SELL is never blocked by the gas reserve (even at $5.99 cash)
+    pf8d = Portfolio(initial_capital_usd=100.0)
+    pf8d.cash_usd = 5.99
+    pf8d.positions["ETH"] = Position("ETH", "Layer 1", qty=0.05, entry_price=2000.0, cost_usd=100.0)
+    scores8d = {
+        "narrative_scores": {"Layer 1": 20.0},  # below exit threshold -> SELL
+        "best_tokens": {"Layer 1": "ETH"},
+    }
+    decs8d = trader.decide(scores8d, {"ETH": 1800.0}, pf8d)
+    sell8d = next((d for d in decs8d if d.action == "SELL"), None)
+    check("SELL not blocked by gas reserve",
+          sell8d is not None and sell8d.token == "ETH",
+          extra=f"decisions: {[(d.action, d.token) for d in decs8d]}")
 
     print(f"\n{'='*50}")
     print(f"  {passed} passed, {failed} failed")

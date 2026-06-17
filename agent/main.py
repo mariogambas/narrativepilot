@@ -17,6 +17,7 @@ import asyncio
 import json
 import os
 import signal
+import time
 from datetime import datetime, timezone
 
 import aiofiles
@@ -60,17 +61,40 @@ class Agent:
         )
         self.executor = TradeExecutor(
             mode=mode,
-            rpc_url=os.getenv("BSC_RPC_URL", ""),
-            # private key is only read in mainnet; testnet passes it through but
-            # the executor never touches it.
-            private_key=os.getenv("WALLET_PRIVATE_KEY", "") if mode == "mainnet" else "",
-            slippage=float(os.getenv("SLIPPAGE", "0.01")),
+            slippage=float(os.getenv("SLIPPAGE", "1.0")),
         )
         self.portfolio = Portfolio(initial_capital_usd=self.initial_capital)
         self.cycle = 0
         self._running = True
+        self.last_trade_time: float = self._recover_last_trade_time()
 
     # ------------------------------------------------------------------
+
+    def _recover_last_trade_time(self) -> float:
+        """On startup, read trades.log to find the last BUY/SELL timestamp.
+
+        Survives PC restarts: if the agent restarted but a real trade happened
+        recently, we won't fire a spurious forced trade on the first cycle.
+        Falls back to time.time() if no log exists yet.
+        """
+        try:
+            with open(LOG_PATH, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+            for line in reversed(lines):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                    if record.get("action") in ("BUY", "SELL"):
+                        ts_str = record.get("timestamp", "")
+                        dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                        return dt.timestamp()
+                except (json.JSONDecodeError, ValueError):
+                    continue
+        except FileNotFoundError:
+            pass
+        return time.time()
 
     async def _write_log(self, record: dict) -> None:
         async with aiofiles.open(LOG_PATH, "a", encoding="utf-8") as f:
@@ -113,23 +137,34 @@ class Agent:
         needed |= set(self.portfolio.positions.keys())
         prices = await self.cmc.get_prices(needed)
         # 4) decide (trader/risk logic unchanged)
-        decisions = self.trader.decide(scores, prices, self.portfolio)
+        hours_since_last_trade = (time.time() - self.last_trade_time) / 3600
+        force_trade = hours_since_last_trade >= 23.0
+        decisions = self.trader.decide(scores, prices, self.portfolio, force_trade=force_trade)
 
         executed = []
         for d in decisions:
             if d.action not in ("BUY", "SELL"):
                 continue
-            res = self.executor.execute(d)
+            res = await self.executor.execute(d)
             if res.success and not res.error:
                 if d.action == "BUY" and res.qty > 0:
                     self.portfolio.apply_buy(d.token, d.narrative, res.amount_usd, res.fill_price)
                 elif d.action == "SELL" and d.token in self.portfolio.positions:
                     self.portfolio.apply_sell(d.token, res.fill_price)
+                self.last_trade_time = time.time()
             executed.append((d, res))
 
         value = self.portfolio.total_value(prices)
         self.portfolio.update_peak(value)
         base = self._base_record(scores, value, prices)
+
+        # Log warning decisions from forced trade path (HOLD with special reason)
+        forced_warnings = [
+            d for d in decisions
+            if d.action == "HOLD" and "FORCED_DAILY_TRADE" in d.reason
+        ]
+        for d in forced_warnings:
+            print(f"  [WARN] {d.reason}", flush=True)
 
         # One log line per executed trade; if nothing traded, one HOLD line.
         if executed:
@@ -166,37 +201,39 @@ class Agent:
             }
             await self._write_log(record)
 
-        self._print_cycle(scores, executed, value)
+        self._print_cycle(scores, executed, value, hours_since_last_trade)
 
-    def _print_cycle(self, scores: dict, executed: list, value: float) -> None:
+    def _print_cycle(self, scores: dict, executed: list, value: float, hours_since_trade: float = 0.0) -> None:
         ns = scores["narrative_scores"]
         scoreline = "  ".join(f"{k}={v}" for k, v in ns.items())
         mr = scores.get("market_regime", {})
-        print(f"\n[cycle {self.cycle}] {_utc_now()}  ({self.mode})")
+        force_tag = "  [FORCE_TRADE_ACTIVE]" if hours_since_trade >= 23.0 else ""
+        print(f"\n[cycle {self.cycle}] {_utc_now()}  ({self.mode}){force_tag}", flush=True)
+        print(f"  last_trade: {hours_since_trade:.1f}h ago", flush=True)
         if mr:
             print(f"  regime: fear&greed={mr.get('fear_greed')} ({mr.get('fear_greed_label')})  "
-                  f"factor={mr.get('regime_factor')}")
-        print(f"  scores: {scoreline}")
-        print(f"  portfolio: ${value:,.2f}   positions: {list(self.portfolio.positions)}")
+                  f"factor={mr.get('regime_factor')}", flush=True)
+        print(f"  scores: {scoreline}", flush=True)
+        print(f"  portfolio: ${value:,.2f}   positions: {list(self.portfolio.positions)}", flush=True)
         if not executed:
-            print("  action: HOLD (no actionable signal)")
+            print("  action: HOLD (no actionable signal)", flush=True)
         for d, res in executed:
             status = "ok" if (res.success and not res.error) else f"FAILED ({res.error})"
-            print(f"  action: {d.action} {d.token} ${res.amount_usd:.2f} -> {status}")
+            print(f"  action: {d.action} {d.token} ${res.amount_usd:.2f} -> {status}", flush=True)
 
     async def run(self) -> None:
         interval = self.scan_minutes * 60
-        print(f"NarrativePilot starting in {self.mode.upper()} mode.")
+        print(f"NarrativePilot starting in {self.mode.upper()} mode.", flush=True)
         print(f"Capital ${self.initial_capital:.2f} | scan every {self.scan_minutes:g} min "
-              f"| log -> {LOG_PATH}")
+              f"| log -> {LOG_PATH}", flush=True)
         if self.mode == "testnet":
-            print("Testnet: trades are SIMULATED. No funds at risk, no key needed.\n")
+            print("Testnet: trades are SIMULATED. No funds at risk, no key needed.\n", flush=True)
 
         while self._running:
             try:
                 await self.run_cycle()
             except Exception as e:
-                print(f"  [cycle {self.cycle}] error: {e}")
+                print(f"  [cycle {self.cycle}] error: {e}", flush=True)
             if not self._running:
                 break
             try:
