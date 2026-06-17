@@ -366,11 +366,11 @@
     </div>
     <div class="hero-badges">
       <span class="badge">CMC Agent Hub MCP</span>
+      <span class="badge">Trust Wallet Agent Kit</span>
       <span class="badge">BNB Chain</span>
-      <span class="badge">PancakeSwap V2</span>
-      <span class="badge">Python 3.12</span>
-      <span class="badge">web3.py</span>
-      <span class="badge">57 tests passing</span>
+      <span class="badge">12-token universe</span>
+      <span class="badge">87 tests passing</span>
+      <span class="badge">Registered on-chain ✓</span>
     </div>
   </div>
 </section>
@@ -452,13 +452,13 @@
       <div class="step">
         <div class="step-num">03 / DECIDE</div>
         <div class="step-title">Conviction tiers</div>
-        <div class="step-desc">Score ≥70: full BUY (10% sizing). Score 55–70: reduced conviction BUY (5%). Score &lt;40: SELL. Drawdown cap, stop-loss, and anti-churn guards applied.</div>
+        <div class="step-desc">Score ≥70: full BUY (10% sizing). Score 55–70: reduced conviction BUY (5%). Score &lt;40: SELL. Drawdown cap, stop-loss, gas reserve, and anti-churn guards applied. A forced minimum-activity trade (2.5%) fires only if 23+ hours pass with zero trades, required to qualify for live ranking.</div>
         <div class="step-accent">→</div>
       </div>
       <div class="step">
         <div class="step-num">04 / EXECUTE</div>
-        <div class="step-title">PancakeSwap V2</div>
-        <div class="step-desc">Swaps via web3.py with local key signing. Verified BSC liquidity for BNB, CAKE, ETH (Binance-Peg), SOL (Binance-Peg). Every tx logged to JSON.</div>
+        <div class="step-title">Trust Wallet Agent Kit</div>
+        <div class="step-desc">Swaps via TWAK's non-custodial agent wallet — local signing, no raw private key handled by the agent. Verified BSC liquidity across a 12-token eligible universe: ETH, CAKE, DOGE, XRP, ADA, TWT, LINK, AVAX, FIL, LTC, INJ, UNI. Every tx logged to JSON.</div>
         <div class="step-accent">↺</div>
       </div>
     </div>
@@ -525,7 +525,7 @@
     <div class="metrics-row">
       <div class="metric-cell">
         <div class="metric-val yellow">10%</div>
-        <div class="metric-label">Max position size per narrative</div>
+        <div class="metric-label">Max position size (full conviction)</div>
       </div>
       <div class="metric-cell">
         <div class="metric-val red">−8%</div>
@@ -536,12 +536,18 @@
         <div class="metric-label">Portfolio drawdown cap</div>
       </div>
       <div class="metric-cell">
-        <div class="metric-val">5%</div>
-        <div class="metric-label">Reduced conviction sizing (55–70 zone)</div>
+        <div class="metric-val">$6</div>
+        <div class="metric-label">Gas reserve, never spent on buys</div>
       </div>
       <div class="metric-cell">
-        <div class="metric-val yellow">57</div>
+        <div class="metric-val yellow">87</div>
         <div class="metric-label">Unit tests passing</div>
+      </div>
+    </div>
+    <div class="regime-box" style="border-left-color: var(--yellow);">
+      <div class="regime-item">
+        <div class="regime-label">Minimum daily activity</div>
+        <div class="regime-val">Forces a 2.5% entry if 23h pass with zero trades — required to qualify for Track 1 ranking, survives PC restarts via log replay</div>
       </div>
     </div>
   </div>
@@ -555,23 +561,21 @@
     </div>
     <div class="stack-pills">
       <span class="stack-pill highlight">CMC Agent Hub MCP</span>
+      <span class="stack-pill highlight">Trust Wallet Agent Kit</span>
       <span class="stack-pill highlight">BNB Chain</span>
-      <span class="stack-pill highlight">PancakeSwap V2</span>
       <span class="stack-pill">Python 3.12</span>
-      <span class="stack-pill">web3.py</span>
-      <span class="stack-pill">eth-account</span>
       <span class="stack-pill">asyncio</span>
       <span class="stack-pill">Chart.js</span>
       <span class="stack-pill">JSON audit log</span>
     </div>
     <div class="regime-box" style="border-left-color: var(--green);">
       <div class="regime-item">
-        <div class="regime-label">Tradeable tokens (BSC)</div>
-        <div class="regime-val" style="color: var(--green);">BNB · CAKE · ETH (Binance-Peg) · SOL (Binance-Peg)</div>
+        <div class="regime-label">Tradeable tokens (12, official eligible list)</div>
+        <div class="regime-val" style="color: var(--green);">ETH · CAKE · DOGE · XRP · ADA · TWT · LINK · AVAX · FIL · LTC · INJ · UNI</div>
       </div>
       <div class="regime-item">
-        <div class="regime-label">Liquidity verified</div>
-        <div class="regime-val">PancakeSwap V2 · June 2026</div>
+        <div class="regime-label">On-chain proof</div>
+        <div class="regime-val"><a href="https://bscscan.com/tx/0x9a0d88d951b8a91a06b1f6f8f646a3220bcf883f186f245e4bfc6954d00c667a" target="_blank" style="color:var(--green);">Competition registration tx</a> · <a href="https://bscscan.com/tx/0xa973fbc43bffc1f50a15c96890452a8a60942bf004d427257be1357ef5675073" target="_blank" style="color:var(--green);">Validation swap tx</a></div>
       </div>
     </div>
   </div>
