@@ -17,7 +17,7 @@ If you discover a security vulnerability in NarrativePilot AI, please report it 
 
 ### How to report
 
-Send an email to: **mariosalamancaenredes@gmail.com**
+Send an email to: **narrativepilotai@gmail.com**
 
 Please include:
 - A description of the vulnerability and its potential impact
