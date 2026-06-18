@@ -34,6 +34,8 @@ LOG_PATH = os.path.join(
     "logs",
     "trades.log",
 )
+# Create logs/ on import so a fresh clone never fails on first write.
+os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
 
 
 def _utc_now() -> str:
