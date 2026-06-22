@@ -20,6 +20,7 @@ Two modes, selected by TRADING_MODE:
 import asyncio
 import hashlib
 import json
+import os
 import re
 import subprocess
 import time
@@ -27,6 +28,10 @@ from dataclasses import dataclass
 from typing import Optional
 
 from trader import TradeDecision
+
+# Absolute path to the TWAK CLI binary. Overridable via TWAK_BIN if the
+# install location changes; defaults to the confirmed path on this system.
+TWAK_BIN = os.environ.get("TWAK_BIN", "/home/mario/.npm-global/bin/twak")
 
 # ----------------------------------------------------------------------
 # BSC mainnet token addresses (PancakeSwap V2 verified pairs)
@@ -138,14 +143,14 @@ class TradeExecutor:
         """Synchronous TWAK call — run inside asyncio.to_thread."""
         try:
             result = subprocess.run(
-                ["twak"] + args,
+                [TWAK_BIN] + args,
                 capture_output=True, text=True, timeout=TWAK_TIMEOUT,
             )
             return result.returncode, result.stdout, result.stderr
         except subprocess.TimeoutExpired:
             return 1, "", f"twak timed out after {TWAK_TIMEOUT}s"
         except FileNotFoundError:
-            return 1, "", "twak not found in PATH — is TWAK installed?"
+            return 1, "", f"twak binary not found at {TWAK_BIN} — is TWAK installed? (override with TWAK_BIN env var)"
         except Exception as e:
             return 1, "", str(e)
 
@@ -281,21 +286,24 @@ class TradeExecutor:
         qty: float = 0.0,
     ) -> ExecutionResult:
         if rc != 0:
+            parts = [p for p in (stdout.strip(), stderr.strip()) if p]
+            full_error = " | ".join(parts) if parts else f"twak exited with code {rc}"
             return ExecutionResult(
                 success=False, action=action, token=decision.token,
                 amount_usd=decision.amount_usd, fill_price=decision.price,
                 qty=0.0, tx_hash="", simulated=False,
-                error=stderr or stdout or f"twak exited with code {rc}",
+                error=f"twak rc={rc}: {full_error}",
             )
 
         try:
             data = json.loads(stdout)
         except json.JSONDecodeError:
+            parts = [p for p in (stdout.strip(), stderr.strip()) if p]
             return ExecutionResult(
                 success=False, action=action, token=decision.token,
                 amount_usd=decision.amount_usd, fill_price=decision.price,
                 qty=0.0, tx_hash="", simulated=False,
-                error=f"unparseable twak output: {stdout[:200]}",
+                error=f"unparseable twak output: {' | '.join(parts)}",
             )
 
         # --- tx hash: named field or fallback scan of all string values ---
@@ -332,7 +340,7 @@ class TradeExecutor:
             action=action, token=decision.token,
             amount_usd=decision.amount_usd, fill_price=fill_price,
             qty=amount_out, tx_hash=tx_hash, simulated=False,
-            error=None if tx_hash else f"no tx_hash in twak output: {stdout[:200]}",
+            error=None if tx_hash else f"no tx_hash in twak output (rc=0): stdout={stdout.strip()!r} stderr={stderr.strip()!r}",
         )
 
 
