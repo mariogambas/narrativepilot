@@ -17,6 +17,7 @@ import asyncio
 import json
 import os
 import signal
+import sys
 import time
 from datetime import datetime, timezone
 
@@ -65,12 +66,64 @@ class Agent:
             mode=mode,
             slippage=float(os.getenv("SLIPPAGE", "1.0")),
         )
-        self.portfolio = Portfolio(initial_capital_usd=self.initial_capital)
+        self.portfolio = self._recover_portfolio()
         self.cycle = 0
         self._running = True
         self.last_trade_time: float = self._recover_last_trade_time()
 
     # ------------------------------------------------------------------
+
+    def _recover_portfolio(self) -> Portfolio:
+        """On startup, replay every BUY/SELL in trades.log so a restart
+        doesn't reset open positions to empty (which would defeat
+        anti-pyramiding and break PnL tracking). Falls back to a fresh
+        Portfolio if no log exists yet.
+
+        Deliberately ignores the `positions` snapshot field: trades.log is a
+        single append-only file that can span schema changes across a long
+        run (older lines stored `positions` as a plain list of symbol
+        strings, not the current list-of-dicts shape), so trusting its shape
+        is fragile. Only the flat, stable fields on each trade line are used:
+        action, token, narrative, amount_usd, price. `narrative` falls back
+        to "" for older lines written before that field existed.
+
+        Replaying through apply_buy/apply_sell (instead of trusting any
+        snapshot) also reconstructs cash_usd exactly as it was mutated live.
+        Two consecutive BUYs for the same token with no SELL between them
+        naturally collapse into a single position (apply_buy overwrites the
+        dict entry), matching real trading semantics.
+        """
+        portfolio = Portfolio(initial_capital_usd=self.initial_capital)
+        try:
+            with open(LOG_PATH, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+        except FileNotFoundError:
+            return portfolio
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            action = record.get("action")
+            token = record.get("token")
+            if not token or action not in ("BUY", "SELL"):
+                continue
+
+            if action == "BUY":
+                portfolio.apply_buy(
+                    token, record.get("narrative", ""),
+                    float(record.get("amount_usd", 0.0)),
+                    float(record.get("price", 0.0)),
+                )
+            elif action == "SELL" and token in portfolio.positions:
+                portfolio.apply_sell(token, float(record.get("price", 0.0)))
+
+        return portfolio
 
     def _recover_last_trade_time(self) -> float:
         """On startup, read trades.log to find the last BUY/SELL timestamp.
@@ -175,6 +228,7 @@ class Agent:
                     **base,
                     "action": d.action,
                     "token": d.token,
+                    "narrative": d.narrative,
                     "amount_usd": round(res.amount_usd, 2),
                     "price": round(res.fill_price, 8),
                     "reason": d.reason,
@@ -287,8 +341,110 @@ async def _main() -> None:
     await agent.run()
 
 
-if __name__ == "__main__":
+def _run_tests() -> None:
+    """python agent/main.py --test"""
+    import tempfile
+
+    global LOG_PATH
+
+    passed = 0
+    failed = 0
+
+    def check(name: str, cond: bool, extra: str = "") -> None:
+        nonlocal passed, failed
+        if cond:
+            passed += 1
+            print(f"  PASS  {name}")
+        else:
+            failed += 1
+            print(f"  FAIL  {name}  {extra}")
+
+    os.environ.setdefault("CMC_API_KEY", "test_key_unused")
+
+    def make_agent(records: list[dict]) -> "Agent":
+        tmpdir = tempfile.mkdtemp()
+        fake_log = os.path.join(tmpdir, "trades.log")
+        with open(fake_log, "w", encoding="utf-8") as f:
+            for rec in records:
+                f.write(json.dumps(rec) + "\n")
+        global LOG_PATH
+        old_log_path = LOG_PATH
+        LOG_PATH = fake_log
+        try:
+            return Agent(mode="testnet")
+        finally:
+            LOG_PATH = old_log_path
+
+    print("\n[1] Two BUYs for the same token, no SELL -> single open position")
+    agent1 = make_agent([
+        {"action": "BUY", "token": "ETH", "narrative": "Ethereum Ecosystem",
+         "amount_usd": 50.0, "price": 1800.0},
+        {"action": "BUY", "token": "ETH", "narrative": "Layer 1",
+         "amount_usd": 30.0, "price": 1850.0},
+    ])
+    check("ETH appears exactly once after two BUYs with no SELL",
+          list(agent1.portfolio.positions.keys()) == ["ETH"],
+          extra=f"got {list(agent1.portfolio.positions.keys())}")
+    check("recovered position reflects the LATEST buy's entry price",
+          abs(agent1.portfolio.positions["ETH"].entry_price - 1850.0) < 1e-9,
+          extra=f"got {agent1.portfolio.positions['ETH'].entry_price}")
+    check("narrative taken from that BUY's own `narrative` field (renamed narrative)",
+          agent1.portfolio.positions["ETH"].narrative == "Layer 1",
+          extra=f"got {agent1.portfolio.positions['ETH'].narrative}")
+
+    print("\n[2] BUY followed by a later SELL -> position closed on recovery")
+    agent2 = make_agent([
+        {"action": "BUY", "token": "CAKE", "narrative": "Binance Ecosystem",
+         "amount_usd": 10.0, "price": 2.5},
+        {"action": "SELL", "token": "CAKE", "amount_usd": 12.0, "price": 3.0},
+    ])
+    check("CAKE not in positions after a later SELL",
+          "CAKE" not in agent2.portfolio.positions,
+          extra=f"got {list(agent2.portfolio.positions.keys())}")
+
+    print("\n[3] Old-schema log lines (positions as a plain string list) don't crash recovery")
+    agent3b = make_agent([
+        # Mimics older log entries written before `narrative` existed and
+        # before `positions` became a list of dicts — just symbol strings.
+        # _recover_portfolio must ignore `positions` entirely and not choke
+        # on its shape.
+        {"action": "BUY", "token": "ETH", "amount_usd": 26.70, "price": 1800.0,
+         "open_positions": ["ETH"], "positions": ["ETH"]},
+        {"action": "BUY", "token": "UNI", "amount_usd": 53.40, "price": 7.20,
+         "open_positions": ["ETH", "UNI"], "positions": ["ETH", "UNI"]},
+    ])
+    check("old-schema positions field (list of strings) doesn't raise",
+          set(agent3b.portfolio.positions.keys()) == {"ETH", "UNI"},
+          extra=f"got {list(agent3b.portfolio.positions.keys())}")
+    check("recovered narrative defaults to '' for lines missing the field",
+          agent3b.portfolio.positions["ETH"].narrative == "",
+          extra=f"got {agent3b.portfolio.positions['ETH'].narrative!r}")
+
+    print("\n[4] No log file yet -> fresh portfolio, no crash")
+    tmpdir = tempfile.mkdtemp()
+    missing_log = os.path.join(tmpdir, "does_not_exist.log")
+    old_log_path = LOG_PATH
+    LOG_PATH = missing_log
     try:
-        asyncio.run(_main())
-    except KeyboardInterrupt:
-        print("\nInterrupted.")
+        agent3 = Agent(mode="testnet")
+    finally:
+        LOG_PATH = old_log_path
+    check("fresh portfolio when log is missing",
+          len(agent3.portfolio.positions) == 0
+          and agent3.portfolio.cash_usd == agent3.initial_capital)
+
+    print(f"\n{'='*50}")
+    print(f"  {passed} passed, {failed} failed")
+    print(f"{'='*50}")
+    if failed:
+        raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    if "--test" in sys.argv:
+        _run_tests()
+    else:
+        try:
+            asyncio.run(_main())
+        except KeyboardInterrupt:
+            print("\nInterrupted.")
