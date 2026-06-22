@@ -216,10 +216,11 @@ class Trader:
             token = best_tokens.get(narrative)
             price = prices.get(token, 0.0) if token else 0.0
 
-            already_held = any(
-                p.narrative == narrative and s not in sold
-                for s, p in portfolio.positions.items()
-            )
+            # Anti-pyramiding checks the TOKEN, not the narrative name: the
+            # Hub's narratives are dynamic and can relabel/reshuffle every
+            # cycle, so the same token (e.g. ETH) can surface under a
+            # different narrative name than the one recorded on entry.
+            already_held = token in portfolio.positions and token not in sold
 
             if already_held:
                 decisions.append(TradeDecision(
@@ -469,6 +470,26 @@ def _run_tests() -> None:
           not any(d.action == "BUY" for d in decs6c))
     hold6c = next((d for d in decs6c if d.action == "HOLD"), None)
     check("no-pyramiding reason logged", hold6c and "not pyramiding" in hold6c.reason)
+
+    # Anti-pyramiding must key off the TOKEN, not the narrative label: the
+    # Hub's narratives are dynamic and the same token can resurface under a
+    # different narrative name across cycles (e.g. ETH bought under
+    # "Ethereum Ecosystem" in cycle 1, but cycle 2's signal calls it
+    # "Layer 1"). Same token -> still must HOLD, not re-buy.
+    pf6f = Portfolio(initial_capital_usd=100.0)
+    pf6f.apply_buy("ETH", "Ethereum Ecosystem", 50.0, 1800.0)
+    scores6f = {
+        "narrative_scores": {"Layer 1": 90.0},   # different narrative name, same token
+        "best_tokens": {"Layer 1": "ETH"},
+    }
+    decs6f = trader.decide(scores6f, {"ETH": 1800.0}, pf6f)
+    check("same token under a renamed narrative -> no BUY (anti-pyramiding)",
+          not any(d.action == "BUY" for d in decs6f),
+          extra=f"decisions: {[(d.action, d.token, d.narrative) for d in decs6f]}")
+    hold6f = next((d for d in decs6f if d.action == "HOLD"), None)
+    check("renamed-narrative case still logs not-pyramiding reason",
+          hold6f and "not pyramiding" in hold6f.reason,
+          extra=f"reason: {hold6f.reason if hold6f else None}")
 
     # full-conviction path unchanged: score 90 still buys 10%
     pf6d = Portfolio(initial_capital_usd=100.0)
