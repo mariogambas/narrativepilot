@@ -291,6 +291,7 @@ class Trader:
                         if best_tokens.get(nar)
                         and best_tokens.get(nar) not in portfolio.positions
                         and best_tokens.get(nar) not in sold
+                        and prices.get(best_tokens.get(nar), 0.0) > 0
                     ),
                     key=lambda x: x[1],
                     reverse=True,
@@ -546,6 +547,20 @@ def _run_tests() -> None:
           not any("FORCED_DAILY_TRADE" in d.reason for d in decs7d))
     check("force_trade=False: no BUY emitted (scores 45/42 are in HOLD band)",
           not any(d.action == "BUY" for d in decs7d))
+
+    # [7e] best-score candidate (Layer 1/ETH) has no price this cycle -> forced
+    # trade must skip it and pick the next-best candidate that DOES have a
+    # price (DeFi/LINK), instead of failing with a misleading "no price" HOLD.
+    pf7e = Portfolio(initial_capital_usd=100.0)
+    scores7e = {
+        "narrative_scores": {"Layer 1": 50.0, "DeFi": 45.0},
+        "best_tokens": {"Layer 1": "ETH", "DeFi": "LINK"},
+    }
+    decs7e = trader.decide(scores7e, {"LINK": 8.0}, pf7e, force_trade=True)  # no ETH price
+    fb7e = next((d for d in decs7e if d.action == "BUY"), None)
+    check("force_trade skips top candidate with no price, picks priced one",
+          fb7e is not None and fb7e.token == "LINK",
+          extra=f"got {fb7e.token if fb7e else None}; decisions: {[(d.action, d.token, d.reason) for d in decs7e]}")
 
     print("\n[8] Gas reserve (GAS_RESERVE_USD = $6 always held back from BUYs)")
 
