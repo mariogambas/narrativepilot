@@ -113,15 +113,37 @@ class Agent:
             token = record.get("token")
             if not token or action not in ("BUY", "SELL"):
                 continue
+            # A failed execution (TWAK error, no liquidity, etc.) is still
+            # logged for visibility, but nothing was actually bought/sold
+            # on-chain — replaying it would fabricate a position or vanish
+            # a real one. Skip anything that recorded an error.
+            if record.get("error"):
+                continue
+
+            # Defensive: some lines are malformed or hand-edited (e.g. a
+            # manually-inserted "recovery" entry with price/amount missing
+            # or null). A real successful trade always has positive numeric
+            # amount_usd and price — anything else can't be replayed safely,
+            # so skip it loudly rather than crash or fabricate a 0-qty
+            # position that would silently zero out the portfolio's value.
+            try:
+                amount_usd = float(record.get("amount_usd") or 0.0)
+                price = float(record.get("price") or 0.0)
+            except (TypeError, ValueError):
+                print(f"  [WARN] skipping unreplayable log line for {token} "
+                      f"(bad amount_usd/price): {line[:200]}", flush=True)
+                continue
+            if amount_usd <= 0 or price <= 0:
+                print(f"  [WARN] skipping unreplayable log line for {token} "
+                      f"(amount_usd={amount_usd}, price={price}): {line[:200]}", flush=True)
+                continue
 
             if action == "BUY":
                 portfolio.apply_buy(
-                    token, record.get("narrative", ""),
-                    float(record.get("amount_usd", 0.0)),
-                    float(record.get("price", 0.0)),
+                    token, record.get("narrative", ""), amount_usd, price,
                 )
             elif action == "SELL" and token in portfolio.positions:
-                portfolio.apply_sell(token, float(record.get("price", 0.0)))
+                portfolio.apply_sell(token, price)
 
         return portfolio
 
@@ -402,7 +424,58 @@ def _run_tests() -> None:
           "CAKE" not in agent2.portfolio.positions,
           extra=f"got {list(agent2.portfolio.positions.keys())}")
 
-    print("\n[3] Old-schema log lines (positions as a plain string list) don't crash recovery")
+    print("\n[3] Failed executions (TWAK errors) must not be replayed as real trades")
+    agent_failed = make_agent([
+        # Mirrors the real production incident: a BUY that failed because
+        # twak wasn't found in PATH still gets logged for visibility, with
+        # action=BUY/token=ETH but a non-null `error`. Replaying it would
+        # fabricate an ETH position and wrongly drain cash_usd, producing a
+        # phantom drawdown later (total_value would then miss the real
+        # position value entirely once the position doesn't exist).
+        {"action": "BUY", "token": "ETH", "narrative": "Ethereum Ecosystem",
+         "amount_usd": 26.70, "price": 1800.0,
+         "error": "twak rc=1: twak binary not found at /home/mario/.npm-global/bin/twak"},
+        {"action": "BUY", "token": "UNI", "narrative": "DeFi",
+         "amount_usd": 53.40, "price": 7.20,
+         "error": "twak rc=1: twak binary not found at /home/mario/.npm-global/bin/twak"},
+    ])
+    check("failed BUYs are not replayed into positions",
+          len(agent_failed.portfolio.positions) == 0,
+          extra=f"got {list(agent_failed.portfolio.positions.keys())}")
+    check("failed BUYs don't drain cash_usd on recovery",
+          abs(agent_failed.portfolio.cash_usd - agent_failed.initial_capital) < 1e-9,
+          extra=f"got {agent_failed.portfolio.cash_usd}")
+
+    print("\n[3b] A successful BUY followed by a FAILED sell attempt keeps the position open")
+    agent_failed_sell = make_agent([
+        {"action": "BUY", "token": "ETH", "narrative": "Ethereum Ecosystem",
+         "amount_usd": 50.0, "price": 1800.0},
+        {"action": "SELL", "token": "ETH", "narrative": "Ethereum Ecosystem",
+         "amount_usd": 50.0, "price": 1750.0,
+         "error": "twak rc=1: twak binary not found at /home/mario/.npm-global/bin/twak"},
+    ])
+    check("failed SELL does not remove the still-open position",
+          "ETH" in agent_failed_sell.portfolio.positions,
+          extra=f"got {list(agent_failed_sell.portfolio.positions.keys())}")
+
+    print("\n[3c] Malformed/hand-edited log line (null price) is skipped, not crashed or zeroed")
+    agent_malformed = make_agent([
+        # Mirrors the real corrupted line found in production: a manually
+        # inserted "recovery" entry with narrative="ETH Recovery" and
+        # price=null. float(None) raises TypeError if not guarded — this
+        # must not crash startup, and must not fabricate a 0-qty position
+        # that would silently zero out the portfolio's reported value.
+        {"action": "BUY", "token": "ETH", "narrative": "ETH Recovery",
+         "amount_usd": 130.29, "price": None},
+    ])
+    check("malformed line with null price doesn't crash recovery",
+          "ETH" not in agent_malformed.portfolio.positions,
+          extra=f"got {list(agent_malformed.portfolio.positions.keys())}")
+    check("cash_usd untouched when the only log line is unreplayable",
+          abs(agent_malformed.portfolio.cash_usd - agent_malformed.initial_capital) < 1e-9,
+          extra=f"got {agent_malformed.portfolio.cash_usd}")
+
+    print("\n[4] Old-schema log lines (positions as a plain string list) don't crash recovery")
     agent3b = make_agent([
         # Mimics older log entries written before `narrative` existed and
         # before `positions` became a list of dicts — just symbol strings.
@@ -420,7 +493,7 @@ def _run_tests() -> None:
           agent3b.portfolio.positions["ETH"].narrative == "",
           extra=f"got {agent3b.portfolio.positions['ETH'].narrative!r}")
 
-    print("\n[4] No log file yet -> fresh portfolio, no crash")
+    print("\n[5] No log file yet -> fresh portfolio, no crash")
     tmpdir = tempfile.mkdtemp()
     missing_log = os.path.join(tmpdir, "does_not_exist.log")
     old_log_path = LOG_PATH
