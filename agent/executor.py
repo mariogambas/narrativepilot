@@ -89,7 +89,10 @@ class TradeExecutor:
     def __init__(
         self,
         mode: str,
-        slippage: float = 1.0,  # percent, passed to twak --slippage
+        slippage: float = 3.0,  # percent, passed to twak --slippage
+        # 3.0 default (was 1.0): a live SELL failed with "execution reverted:
+        # APPROVAL_SENT_SWAP_FAILED" at 1% slippage and succeeded manually at
+        # 3%. Low-liquidity BSC pairs need more headroom than 1%.
     ):
         self.mode = mode.lower()
         self.slippage = slippage

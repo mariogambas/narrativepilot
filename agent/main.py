@@ -64,7 +64,7 @@ class Agent:
         )
         self.executor = TradeExecutor(
             mode=mode,
-            slippage=float(os.getenv("SLIPPAGE", "1.0")),
+            slippage=float(os.getenv("SLIPPAGE", "3.0")),
         )
         self.portfolio = self._recover_portfolio()
         self.cycle = 0
